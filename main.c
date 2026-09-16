@@ -3,15 +3,18 @@
 #include <stdint.h>
 #include <string.h>
 
-
-/* CONSTANTES Y CONFIGURACIÓN DE HARDWARE */
+/* ========================================================================= */
+/* CONSTANTES Y CONFIGURACIÓN DE HARDWARE (MV1 - VERSIÓN 2026)               */
+/* ========================================================================= */
 
 #define RAM_SIZE       16384    /* Memoria principal fija de 16 KiB */
 #define SEG_AMOUNT     8        /* Entradas en la tabla de descriptores */
 #define HEADER_SIZE    8        /* Cabecera del archivo binario .vmx */
+#define ENTRY_INACTIVE 0xFFFF   /* Valor indicador de segmento inactivo (-1) */
 
-/* ENUMERACIONES (Identificadores de registros según consigna 2026)          */
-
+/* ========================================================================= */
+/* ENUMERACIONES Y DICCIONARIOS                                              */
+/* ========================================================================= */
 
 typedef enum {
     /* Instrucción y control (0..3) */
@@ -31,40 +34,39 @@ typedef enum {
     CS = 26, DS
 } RegName;
 
-/* Nombres legibles para el desensamblador (-d) */
 static const char* regStr[32] = {
-    "IP",       // 0
-    "OPC",      // 1
-    "OP1",      // 2
-    "OP2",      // 3
-    "LAR",      // 4
-    "MAR",      // 5
-    "MBR",      // 6
-    "RESERVED", // 7
-    "RESERVED", // 8
-    "RESERVED", // 9
-    "EAX",      // 10
+    "IP",       // 0  - Puntero de instrucción
+    "OPC",      // 1  - Código de operación
+    "OP1",      // 2  - Operando 1
+    "OP2",      // 3  - Operando 2
+    "LAR",      // 4  - Logic Address Register
+    "MAR",      // 5  - Memory Address Register
+    "MBR",      // 6  - Memory Buffer Register
+    "RESERVED", // 7  
+    "RESERVED", // 8  
+    "RESERVED", // 9  
+    "EAX",      // 10 
     "EBX",      // 11
-    "ECX",      // 12
-    "EDX",      // 13
-    "EEX",      // 14
-    "EFX",      // 15
-    "AC",       // 16
-    "CC",       // 17
-    "RESERVED", // 18
-    "RESERVED", // 19
-    "RESERVED", // 20
-    "RESERVED", // 21
-    "RESERVED", // 22
-    "RESERVED", // 23
-    "RESERVED", // 24
-    "RESERVED", // 25
-    "CS",       // 26
-    "DS",       // 27
-    "RESERVED", // 28
-    "RESERVED", // 29
-    "RESERVED", // 30
-    "RESERVED"  // 31
+    "ECX",      // 12  
+    "EDX",      // 13 - Registros de propósito general (10 a 15)
+    "EEX",      // 14  
+    "EFX",      // 15 
+    "AC",       // 16 - Acumulador
+    "CC",       // 17 - Código de condición (NZCV)
+    "RESERVED", // 18 
+    "RESERVED", // 19 
+    "RESERVED", // 20 
+    "RESERVED", // 21 
+    "RESERVED", // 22 
+    "RESERVED", // 23 
+    "RESERVED", // 24 
+    "RESERVED", // 25 
+    "CS",       // 26 - Code Segment
+    "DS",       // 27 - Data Segment
+    "RESERVED", // 28 
+    "RESERVED", // 29 
+    "RESERVED", // 30 
+    "RESERVED"  // 31 
 };
 
 /* ENUMERACIÓN DE INSTRUCCIONES (Opcodes 2026) */
@@ -113,8 +115,9 @@ static const char* opStr[32] = {
     "RND"       /* 0x1F */
 };
 
-/* ESTRUCTURAS DEL ESTADO DE LA MÁQUINA VIRTUAL*/
-
+/* ========================================================================= */
+/* ESTRUCTURAS DEL ESTADO DE LA MÁQUINA VIRTUAL                              */
+/* ========================================================================= */
 
 /* Descriptor de segmento: define la ubicación física y tamaño en RAM */
 typedef struct {
@@ -130,29 +133,18 @@ typedef struct {
     int       errorFlag;           /* Estado de error que detiene la máquina */
 } TMV;
 
-
-
-
 /* ========================================================================= */
 /* FUNCIONES DE INICIALIZACIÓN Y CARGA                                       */
 /* ========================================================================= */
 
-/**
- * @brief Configura la memoria segmentada y los registros iniciales.
- * 
- * En la Parte 1:
- * - El segmento 0 (CS) inicia en 0 con el tamaño exacto del código.
- * - El segmento 1 (DS) ocupa el resto de la memoria disponible.
- * - Las entradas 2 a 7 quedan inactivas con valor -1 (0xFFFF).
- */
 void inicializarSegmentosYRegistros(TMV* mv, uint16_t tamCod) {
     // 1. Limpiar memoria física completa (RAM) a 0
     memset(mv->mem, 0, sizeof(mv->mem));
 
-    // 2. Marcar todos los segmentos como inactivos (0xFFFF)
+    // 2. Marcar todos los segmentos como inactivos
     for (int i = 0; i < SEG_AMOUNT; i++) {
-        mv->seg[i].base = 0xFFFF;
-        mv->seg[i].size = 0xFFFF;
+        mv->seg[i].base = ENTRY_INACTIVE;
+        mv->seg[i].size = ENTRY_INACTIVE;
     }
 
     // 3. Configurar Segmento de Código (Entrada 0)
@@ -173,11 +165,6 @@ void inicializarSegmentosYRegistros(TMV* mv, uint16_t tamCod) {
     mv->reg[IP] = mv->reg[CS];             /* El punto de entrada arranca en CS */
 }
 
-/**
- * @brief Abre el archivo .vmx, valida la cabecera y carga el código en RAM.
- * 
- * @return 1 si la carga fue exitosa, 0 si ocurrió un error.
- */
 int cargarArchivo(TMV* mv, const char* nombreArch) {
     FILE* arch = fopen(nombreArch, "rb");
     if (!arch) {
@@ -185,7 +172,6 @@ int cargarArchivo(TMV* mv, const char* nombreArch) {
         return 0;
     }
 
-    // Lectura de los 8 bytes de cabecera
     uint8_t header[HEADER_SIZE];
     if (fread(header, 1, HEADER_SIZE, arch) != HEADER_SIZE) {
         fprintf(stderr, "Error: Archivo incompleto o no se pudo leer la cabecera.\n");
@@ -193,17 +179,14 @@ int cargarArchivo(TMV* mv, const char* nombreArch) {
         return 0;
     }
 
-    // Validación 1: Firma "VMX26" (bytes 0-4) y Versión 1 (byte 5)
     if (memcmp(header, "VMX26", 5) != 0 || header[5] != 1) {
         fprintf(stderr, "Error: Identificador invalido (se esperaba 'VMX26') o version no soportada.\n");
         fclose(arch);
         return 0;
     }
 
-    // Reconstrucción del tamaño del código (bytes 6 y 7 en Big Endian)
     uint16_t tamCod = ((uint16_t)header[6] << 8) | header[7];
 
-    // Validación 2: El código no puede superar la memoria física disponible
     if (tamCod > RAM_SIZE) {
         fprintf(stderr, "Error: El tamano del codigo (%u bytes) excede la memoria RAM disponible (%d bytes).\n", 
                 tamCod, RAM_SIZE);
@@ -211,10 +194,8 @@ int cargarArchivo(TMV* mv, const char* nombreArch) {
         return 0;
     }
 
-    // Inicializar hardware con las dimensiones del código cargado
     inicializarSegmentosYRegistros(mv, tamCod);
 
-    // Carga física del código en memoria principal (a partir de la base de CS que es 0)
     size_t leidos = fread(mv->mem + mv->seg[0].base, 1, tamCod, arch);
     if (leidos != tamCod) {
         fprintf(stderr, "Error: El archivo termino inesperadamente al leer el codigo.\n");
@@ -224,4 +205,113 @@ int cargarArchivo(TMV* mv, const char* nombreArch) {
 
     fclose(arch);
     return 1;
+}
+
+/* ========================================================================= */
+/* EJECUCIÓN Y TRADUCCIÓN DE MEMORIA                                         */
+/* ========================================================================= */
+
+// Función que traduce una dirección lógica a física y valida los límites.
+// Retorna la dirección física (>= 0) o -1 si ocurre un Fallo de Segmento.
+int32_t traducirDireccion(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes_acceso) {
+    
+    uint16_t indice_seg = (dir_logica >> 16) & 0xFFFF;
+    uint16_t offset = dir_logica & 0xFFFF;
+
+    if (indice_seg >= SEG_AMOUNT) return -1; 
+    if (mv->seg[indice_seg].base == ENTRY_INACTIVE) return -1; 
+
+    uint32_t dir_base = mv->seg[indice_seg].base;
+    uint32_t tamano_seg = mv->seg[indice_seg].size;
+
+    uint32_t dir_fisica = dir_base + offset;
+
+    uint32_t limite_segmento = dir_base + tamano_seg;
+    uint32_t limite_acceso = dir_fisica + cant_bytes_acceso;
+
+    if (dir_fisica < dir_base || limite_acceso > limite_segmento) {
+        return -1; 
+    }
+
+    return (int32_t)dir_fisica;
+} 
+
+void ejecutarMV(TMV* mv) {
+    
+    while (mv->reg[IP] != 0xFFFFFFFF) { 
+        
+        // =====================================================================
+        // ETAPA 1: FETCH (BÚSQUEDA DEL PRIMER BYTE)
+        // =====================================================================
+        
+        int32_t dir_fisica_ip = traducirDireccion(mv, mv->reg[IP], 1);
+        
+        if (dir_fisica_ip == -1) {
+            printf("Error: Fallo de segmento leyendo instruccion en IP = %08X\n", mv->reg[IP]);
+            mv->errorFlag = 1;
+            break; 
+        }
+        
+        uint8_t primer_byte = mv->mem[dir_fisica_ip];
+        
+        // =====================================================================
+        // ETAPA 2: DECODE (DECODIFICACIÓN DEL OPCODE Y TIPOS)
+        // =====================================================================
+        
+        uint8_t opcode = primer_byte & 0x1F;
+        uint8_t tipo_opA = (primer_byte >> 4) & 0x03;
+        uint8_t tipo_opB = (primer_byte >> 6) & 0x03;
+        
+        mv->reg[OPC] = opcode;
+        
+        // =====================================================================
+        // ETAPA 3: EXTRACCIÓN DE LOS OPERANDOS (ORDEN INVERSO)
+        // =====================================================================
+        
+        mv->reg[OP1] = (tipo_opA << 24);
+        mv->reg[OP2] = (tipo_opB << 24);
+        
+        uint32_t offset_lectura = 1; 
+
+        // LECTURA DEL OPERANDO B
+        if (tipo_opB > 0) {
+            int32_t valorB = 0;
+            for (int i = 0; i < tipo_opB; i++) {
+                int32_t dir_fis = traducirDireccion(mv, mv->reg[IP] + offset_lectura, 1);
+                if (dir_fis == -1) {
+                    mv->errorFlag = 1; break;
+                }
+                valorB = (valorB << 8) | mv->mem[dir_fis];
+                offset_lectura++;
+            }
+            if (mv->errorFlag) break;
+
+            if (tipo_opB == 2) valorB = (int16_t)valorB;
+            mv->reg[OP2] |= (valorB & 0x00FFFFFF);
+        }
+
+        // LECTURA DEL OPERANDO A
+        if (tipo_opA > 0) {
+            int32_t valorA = 0;
+            for (int i = 0; i < tipo_opA; i++) {
+                int32_t dir_fis = traducirDireccion(mv, mv->reg[IP] + offset_lectura, 1);
+                if (dir_fis == -1) {
+                    mv->errorFlag = 1; break;
+                }
+                valorA = (valorA << 8) | mv->mem[dir_fis];
+                offset_lectura++;
+            }
+            if (mv->errorFlag) break;
+
+            if (tipo_opA == 2) valorA = (int16_t)valorA;
+            mv->reg[OP1] |= (valorA & 0x00FFFFFF);
+        }
+
+        // =====================================================================
+        // ETAPA 4: AVANCE DEL INSTRUCTION POINTER (IP)
+        // =====================================================================
+        
+        mv->reg[IP] += offset_lectura;
+
+    } 
 }
