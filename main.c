@@ -196,3 +196,105 @@ int32_t traducirDireccion(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes_acce
     // Si pasó todas las validaciones de seguridad, devolvemos la dirección física lista para usar en la RAM.
     return (int32_t)dir_fisica;
 } 
+
+void ejecutarMV(TMV* mv) {
+    
+    // 1. EL BUCLE PRINCIPAL
+    // La ejecución se debe repetir hasta que el registro IP apunte fuera del segmento de código, 
+    // o hasta que una instrucción STOP le asigne -1 (0xFFFFFFFF) al registro IP.
+    while (mv->reg[0] != 0xFFFFFFFF) { 
+        
+        // =====================================================================
+        // ETAPA 1: FETCH (BÚSQUEDA DEL PRIMER BYTE)
+        // =====================================================================
+        
+        // Traducimos la dirección lógica del IP a física para leer el primer byte.
+        // REGLA DE ORO: La lectura de la instrucción no debe modificar LAR, MAR ni MBR[cite: 4, 5].
+        int32_t dir_fisica_ip = traducirDireccion(mv, mv->reg[0], 1);
+        
+        if (dir_fisica_ip == -1) {
+            printf("Error: Fallo de segmento leyendo instruccion en IP = %08X\n", mv->reg[0]);
+            mv->errorFlag = 1;
+            break; 
+        }
+        
+        // Leemos el primer byte crudo
+        uint8_t primer_byte = mv->mem[dir_fisica_ip];
+        
+        // =====================================================================
+        // ETAPA 2: DECODE (DECODIFICACIÓN DEL OPCODE Y TIPOS)
+        // =====================================================================
+        
+        // El primer byte de control desglosa el código de operación y el tipo de los operandos[cite: 3].
+        // A) Código de Operación: 5 bits menos significativos.
+        uint8_t opcode = primer_byte & 0x1F;
+        
+        // B) Tipo de Operando A (bits 4 y 5) y Tipo de Operando B (bits 6 y 7).
+        uint8_t tipo_opA = (primer_byte >> 4) & 0x03;
+        uint8_t tipo_opB = (primer_byte >> 6) & 0x03;
+        
+        // Almacenamos el código de operación en el registro OPC (índice 1).
+        mv->reg[1] = opcode;
+        
+        // =====================================================================
+        // ETAPA 3: EXTRACCIÓN DE LOS OPERANDOS (ORDEN INVERSO)
+        // =====================================================================
+        
+        // Inicializamos OP1 y OP2. El byte más significativo contendrá el código binario 
+        // del tipo de operando, y si no existe, el registro tendrá un 0[cite: 5].
+        mv->reg[2] = (tipo_opA << 24);
+        mv->reg[3] = (tipo_opB << 24);
+        
+        // Llevamos la cuenta del tamaño de la instrucción. Arranca en 1 (el primer byte).
+        uint32_t offset_lectura = 1; 
+
+        // LECTURA DEL OPERANDO B (Se lee primero porque se codifican en orden inverso)[cite: 3, 5].
+        if (tipo_opB > 0) {
+            int32_t valorB = 0;
+            // El tamaño del operando en bytes coincide con su código binario[cite: 5].
+            for (int i = 0; i < tipo_opB; i++) {
+                int32_t dir_fis = traducirDireccion(mv, mv->reg[0] + offset_lectura, 1);
+                if (dir_fis == -1) {
+                    mv->errorFlag = 1; break;
+                }
+                valorB = (valorB << 8) | mv->mem[dir_fis];
+                offset_lectura++;
+            }
+            if (mv->errorFlag) break;
+
+            // Si es un inmediato (tipo 10, ocupa 2 bytes), se interpreta como entero con signo[cite: 3, 5].
+            if (tipo_opB == 2) valorB = (int16_t)valorB;
+            
+            // Los restantes tres bytes guardan el valor del operando[cite: 5].
+            mv->reg[3] |= (valorB & 0x00FFFFFF);
+        }
+
+        // LECTURA DEL OPERANDO A
+        if (tipo_opA > 0) {
+            int32_t valorA = 0;
+            for (int i = 0; i < tipo_opA; i++) {
+                int32_t dir_fis = traducirDireccion(mv, mv->reg[0] + offset_lectura, 1);
+                if (dir_fis == -1) {
+                    mv->errorFlag = 1; break;
+                }
+                valorA = (valorA << 8) | mv->mem[dir_fis];
+                offset_lectura++;
+            }
+            if (mv->errorFlag) break;
+
+            if (tipo_opA == 2) valorA = (int16_t)valorA;
+            mv->reg[2] |= (valorA & 0x00FFFFFF);
+        }
+
+        // =====================================================================
+        // ETAPA 4: AVANCE DEL INSTRUCTION POINTER (IP)
+        // =====================================================================
+        
+        // Ubicamos el registro IP en la próxima instrucción sumando el tamaño de la instrucción actual[cite: 5].
+        mv->reg[0] += offset_lectura;
+
+        // --- ACÁ TERMINA LA BÚSQUEDA Y DECODIFICACIÓN ---
+        // Lo que siga acá abajo será llamar al desensamblador o al switch de ejecución.
+
+    } // Fin del while
+}
