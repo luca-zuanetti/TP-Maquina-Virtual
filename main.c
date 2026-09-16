@@ -16,40 +16,60 @@
 /* ENUMERACIONES (Identificadores de registros según consigna 2026)          */
 /* ========================================================================= */
 
+typedef enum {
+    /* Instrucción y control (0..3) */
+    IP = 0, OPC, OP1, OP2,
+
+    /* Acceso a memoria / Bus (4..6) */
+    LAR = 4, MAR, MBR,
+
+    /* Propósito general (10..15) */
+    EAX = 10, EBX, ECX, EDX, EEX, EFX,
+
+    /* Acumulador - Cod. de condicion (16..17) */
+    AC = 16,
+    CC = 17,
+
+    /* Punteros de segmento (26..27) */
+    CS = 26, DS
+} RegName;
+
+/* Nombres legibles para el desensamblador (-d) */
 static const char* regStr[32] = {
-    "IP",        // 0  - Puntero de instrucción
-    "OPC",       // 1  - Código de operación
-    "OP1",       // 2  - Operando 1
-    "OP2",       // 3  - Operando 2
-    "LAR",       // 4  - Logic Address Register
-    "MAR",       // 5  - Memory Address Register
-    "MBR",       // 6  - Memory Buffer Register
-    "RESERVED",  // 7  
-    "RESERVED",  // 8  
-    "RESERVED",  // 9  
-    "EAX",       // 10 
-    "EBX",       // 11
-    "ECX",       // 12  
-    "EDX",       // 13 - Registros de propósito general (10 a 15)
-    "EEX",       // 14  
-    "EFX",       // 15 
-    "AC",        // 16 - Acumulador
-    "CC",        // 17 - Código de condición (NZCV)
-    "RESERVED",  // 18 
-    "RESERVED",  // 19 
-    "RESERVED",  // 20 
-    "RESERVED",  // 21 
-    "RESERVED",  // 22 
-    "RESERVED",  // 23 
-    "RESERVED",  // 24 
-    "RESERVED",  // 25 
-    "CS",        // 26 - Code Segment
-    "DS",        // 27 - Data Segment
-    "RESERVED",  // 28 
-    "RESERVED",  // 29 
-    "RESERVED",  // 30 
-    "RESERVED"   // 31 
+    "IP",       // 0
+    "OPC",      // 1
+    "OP1",      // 2
+    "OP2",      // 3
+    "LAR",      // 4
+    "MAR",      // 5
+    "MBR",      // 6
+    "RESERVED", // 7
+    "RESERVED", // 8
+    "RESERVED", // 9
+    "EAX",      // 10
+    "EBX",      // 11
+    "ECX",      // 12
+    "EDX",      // 13
+    "EEX",      // 14
+    "EFX",      // 15
+    "AC",       // 16
+    "CC",       // 17
+    "RESERVED", // 18
+    "RESERVED", // 19
+    "RESERVED", // 20
+    "RESERVED", // 21
+    "RESERVED", // 22
+    "RESERVED", // 23
+    "RESERVED", // 24
+    "RESERVED", // 25
+    "CS",       // 26
+    "DS",       // 27
+    "RESERVED", // 28
+    "RESERVED", // 29
+    "RESERVED", // 30
+    "RESERVED"  // 31
 };
+
 
 /* ========================================================================= */
 /* ESTRUCTURAS DEL ESTADO DE LA MÁQUINA VIRTUAL                              */
