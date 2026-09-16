@@ -3,104 +3,161 @@
 #include <stdint.h>
 #include <string.h>
 
-#define RAM_SIZE   16384
-#define SEG_AMOUNT 8
+/* ========================================================================= */
+/* CONSTANTES Y CONFIGURACIÓN DE HARDWARE (MV1 - VERSIÓN 2026)               */
+/* ========================================================================= */
 
-typedef struct {
-    uint16_t base;
-    uint16_t size;
-} TableSeg;
+#define RAM_SIZE       16384    /* Memoria principal fija de 16 KiB */
+#define SEG_AMOUNT     8        /* Entradas en la tabla de descriptores */
+#define HEADER_SIZE    8        /* Cabecera del archivo binario .vmx */
+#define ENTRY_INACTIVE 0xFFFF   /* Valor indicador de segmento inactivo (-1) */
 
-typedef struct {
-    uint8_t  mem[RAM_SIZE];       // unsigned char para evitar bugs de signo
-    int32_t  reg[32];
-    TableSeg seg[SEG_AMOUNT];
-    int      errorFlag;
-} TMV;
+/* ========================================================================= */
+/* ENUMERACIONES (Identificadores de registros según consigna 2026)          */
+/* ========================================================================= */
 
+typedef enum {
+    /* Registros de control e instrucción (0 a 3) */
+    REG_IP = 0,     /* Instruction Pointer: apunta a la próxima instrucción */
+    REG_OPC,        /* Operation Code: código de operación actual */
+    REG_OP1,        /* Operando A decodificado */
+    REG_OP2,        /* Operando B decodificado */
 
+    /* Registros de interfaz de memoria / Bus (4 a 6) */
+    REG_LAR,        /* Logic Address Register: dirección lógica a acceder */
+    REG_MAR,        /* Memory Address Register: parte alta bytes, baja dir. física */
+    REG_MBR,        /* Memory Buffer Register: dato transferido con la memoria */
+
+    /* Registros de propósito general (10 a 15) */
+    REG_EAX = 10,
+    REG_EBX,
+    REG_ECX,
+    REG_EDX,
+    REG_EEX,
+    REG_EFX,
+
+    /* Registros especiales (16 y 17) */
+    REG_AC = 16,    /* Acumulador: operaciones auxiliares y resto de división */
+    REG_CC = 17,    /* Condition Code: banderas de estado NZCV */
+
+    /* Punteros de segmento (26 y 27) */
+    REG_CS = 26,    /* Code Segment: puntero lógico al segmento de código */
+    REG_DS = 27     /* Data Segment: puntero lógico al segmento de datos */
+} RegName;
+
+/* Nombres legibles para el desensamblador (-d) */
 static const char* regStr[32] = {
-    "IP",       // 0
-    "OPC",      // 1
-    "OP1",      // 2
-    "OP2",      // 3
-    "LAR",      // 4
-    "MAR",      // 5
-    "MBR",      // 6
-    "RESERVED", // 7
-    "RESERVED", // 8
-    "RESERVED", // 9
-    "EAX",      // 10
-    "EBX",      // 11
-    "ECX",      // 12
-    "EDX",      // 13
-    "EEX",      // 14
-    "EFX",      // 15
-    "AC",       // 16
-    "CC",       // 17
-    "RESERVED", // 18
-    "RESERVED", // 19
-    "RESERVED", // 20
-    "RESERVED", // 21
-    "RESERVED", // 22
-    "RESERVED", // 23
-    "RESERVED", // 24
-    "RESERVED", // 25
-    "CS",       // 26
-    "DS",       // 27
-    "RESERVED", // 28
-    "RESERVED", // 29
-    "RESERVED", // 30
-    "RESERVED"  // 31
+    [REG_IP]  = "IP",  [REG_OPC] = "OPC", [REG_OP1] = "OP1", [REG_OP2] = "OP2",
+    [REG_LAR] = "LAR", [REG_MAR] = "MAR", [REG_MBR] = "MBR",
+    [REG_EAX] = "EAX", [REG_EBX] = "EBX", [REG_ECX] = "ECX",
+    [REG_EDX] = "EDX", [REG_EEX] = "EEX", [REG_EFX] = "EFX",
+    [REG_AC]  = "AC",  [REG_CC]  = "CC",
+    [REG_CS]  = "CS",  [REG_DS]  = "DS"
 };
 
+/* ========================================================================= */
+/* ESTRUCTURAS DEL ESTADO DE LA MÁQUINA VIRTUAL                              */
+/* ========================================================================= */
+
+/* Descriptor de segmento: define la ubicación física y tamaño en RAM */
+typedef struct {
+    uint16_t base;  /* Dirección física de inicio */
+    uint16_t size;  /* Cantidad de bytes que ocupa el segmento */
+} TableSeg;
+
+/* Estado completo de la máquina virtual (TMV) */
+typedef struct {
+    uint8_t   mem[RAM_SIZE];       /* Memoria física de 16 KiB (bytes sin signo) */
+    int32_t   reg[32];             /* 32 registros de 32 bits con signo */
+    TableSeg  seg[SEG_AMOUNT];     /* Tabla de 8 descriptores de segmentos */
+    int       errorFlag;           /* Estado de error que detiene la máquina */
+} TMV;
+
+/* ========================================================================= */
+/* FUNCIONES DE INICIALIZACIÓN Y CARGA                                       */
+/* ========================================================================= */
+
+/**
+ * @brief Configura la memoria segmentada y los registros iniciales.
+ * 
+ * En la Parte 1:
+ * - El segmento 0 (CS) inicia en 0 con el tamaño exacto del código.
+ * - El segmento 1 (DS) ocupa el resto de la memoria disponible.
+ * - Las entradas 2 a 7 quedan inactivas con valor -1 (0xFFFF).
+ */
 void inicializarSegmentosYRegistros(TMV* mv, uint16_t tamCod) {
-    // 1. Inicializar tabla con -1 (0xFFFF)
+    // 1. Marcar todos los segmentos como inactivos (0xFFFF)
     for (int i = 0; i < SEG_AMOUNT; i++) {
-        mv->seg[i].base = 0xFFFF;
-        mv->seg[i].size = 0xFFFF;
+        mv->seg[i].base = ENTRY_INACTIVE;
+        mv->seg[i].size = ENTRY_INACTIVE;
     }
 
-    // 2. Configurar CS (0) y DS (1)
+    // 2. Configurar Segmento de Código (Entrada 0)
     mv->seg[0].base = 0;
     mv->seg[0].size = tamCod;
+
+    // 3. Configurar Segmento de Datos (Entrada 1)
     mv->seg[1].base = tamCod;
     mv->seg[1].size = RAM_SIZE - tamCod;
 
-    // 3. Inicializar registros
+    // 4. Limpiar todos los registros a 0
     memset(mv->reg, 0, sizeof(mv->reg));
-    mv->reg[26] = 0x00000000;          // CS: segmento 0, offset 0
-    mv->reg[27] = 0x00010000;          // DS: segmento 1, offset 0
-    mv->reg[0]  = mv->reg[26];         // IP arranca en CS
+
+    // 5. Configurar punteros lógicos (16 bits segmento | 16 bits offset)
+    mv->reg[REG_CS] = 0x00000000;              /* Segmento 0, Offset 0 */
+    mv->reg[REG_DS] = 0x00010000;              /* Segmento 1, Offset 0 */
+    mv->reg[REG_IP] = mv->reg[REG_CS];         /* El punto de entrada arranca en CS */
 }
 
+/**
+ * @brief Abre el archivo .vmx, valida la cabecera y carga el código en RAM.
+ * 
+ * @return 1 si la carga fue exitosa, 0 si ocurrió un error.
+ */
 int cargarArchivo(TMV* mv, const char* nombreArch) {
     FILE* arch = fopen(nombreArch, "rb");
     if (!arch) {
-        fprintf(stderr, "Error: No se pudo abrir el archivo %s\n", nombreArch);
+        fprintf(stderr, "Error: No se pudo abrir el archivo '%s'.\n", nombreArch);
         return 0;
     }
-    
-    uint8_t header[8];
-    if (fread(header, 1, 8, arch) != 8) {
+
+    // Lectura de los 8 bytes de cabecera
+    uint8_t header[HEADER_SIZE];
+    if (fread(header, 1, HEADER_SIZE, arch) != HEADER_SIZE) {
+        fprintf(stderr, "Error: Archivo incompleto o no se pudo leer la cabecera.\n");
         fclose(arch);
         return 0;
     }
 
-    // Validar identificador "VMX26" y versión 1
+    // Validación 1: Firma "VMX26" (bytes 0-4) y Versión 1 (byte 5)
     if (memcmp(header, "VMX26", 5) != 0 || header[5] != 1) {
-        fprintf(stderr, "Error: Archivo incompatible o cabecera inválida.\n");
+        fprintf(stderr, "Error: Identificador invalido (se esperaba 'VMX26') o version no soportada.\n");
         fclose(arch);
         return 0;
     }
 
-    // Tamaño de código en Big Endian
+    // Reconstrucción del tamaño del código (bytes 6 y 7 en Big Endian)
     uint16_t tamCod = ((uint16_t)header[6] << 8) | header[7];
 
+    // Validación 2: El código no puede superar la memoria física disponible
+    if (tamCod > RAM_SIZE) {
+        fprintf(stderr, "Error: El tamano del codigo (%u bytes) excede la memoria RAM disponible (%d bytes).\n", 
+                tamCod, RAM_SIZE);
+        fclose(arch);
+        return 0;
+    }
+
+    // Inicializar hardware con las dimensiones del código cargado
     inicializarSegmentosYRegistros(mv, tamCod);
 
-    // Lectura directa en bloque a la memoria RAM
-    fread(mv->mem, 1, tamCod, arch);
+    // Carga física del código en memoria principal (a partir de la base de CS que es 0)
+    size_t leidos = fread(mv->mem + mv->seg[0].base, 1, tamCod, arch);
+    if (leidos != tamCod) {
+        fprintf(stderr, "Error: El archivo termino inesperadamente al leer el codigo.\n");
+        fclose(arch);
+        return 0;
+    }
+
     fclose(arch);
     return 1;
 }
