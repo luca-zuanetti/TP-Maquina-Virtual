@@ -18,6 +18,42 @@ typedef struct {
     int      errorFlag;
 } TMV;
 
+
+static const char* regStr[32] = {
+    "IP",       // 0
+    "OPC",      // 1
+    "OP1",      // 2
+    "OP2",      // 3
+    "LAR",      // 4
+    "MAR",      // 5
+    "MBR",      // 6
+    "RESERVED", // 7
+    "RESERVED", // 8
+    "RESERVED", // 9
+    "EAX",      // 10
+    "EBX",      // 11
+    "ECX",      // 12
+    "EDX",      // 13
+    "EEX",      // 14
+    "EFX",      // 15
+    "AC",       // 16
+    "CC",       // 17
+    "RESERVED", // 18
+    "RESERVED", // 19
+    "RESERVED", // 20
+    "RESERVED", // 21
+    "RESERVED", // 22
+    "RESERVED", // 23
+    "RESERVED", // 24
+    "RESERVED", // 25
+    "CS",       // 26
+    "DS",       // 27
+    "RESERVED", // 28
+    "RESERVED", // 29
+    "RESERVED", // 30
+    "RESERVED"  // 31
+};
+
 void inicializarSegmentosYRegistros(TMV* mv, uint16_t tamCod) {
     // 1. Inicializar tabla con -1 (0xFFFF)
     for (int i = 0; i < SEG_AMOUNT; i++) {
