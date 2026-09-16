@@ -16,43 +16,39 @@
 /* ENUMERACIONES (Identificadores de registros según consigna 2026)          */
 /* ========================================================================= */
 
-typedef enum {
-    /* Registros de control e instrucción (0 a 3) */
-    REG_IP = 0,     /* Instruction Pointer: apunta a la próxima instrucción */
-    REG_OPC,        /* Operation Code: código de operación actual */
-    REG_OP1,        /* Operando A decodificado */
-    REG_OP2,        /* Operando B decodificado */
-
-    /* Registros de interfaz de memoria / Bus (4 a 6) */
-    REG_LAR,        /* Logic Address Register: dirección lógica a acceder */
-    REG_MAR,        /* Memory Address Register: parte alta bytes, baja dir. física */
-    REG_MBR,        /* Memory Buffer Register: dato transferido con la memoria */
-
-    /* Registros de propósito general (10 a 15) */
-    REG_EAX = 10,
-    REG_EBX,
-    REG_ECX,
-    REG_EDX,
-    REG_EEX,
-    REG_EFX,
-
-    /* Registros especiales (16 y 17) */
-    REG_AC = 16,    /* Acumulador: operaciones auxiliares y resto de división */
-    REG_CC = 17,    /* Condition Code: banderas de estado NZCV */
-
-    /* Punteros de segmento (26 y 27) */
-    REG_CS = 26,    /* Code Segment: puntero lógico al segmento de código */
-    REG_DS = 27     /* Data Segment: puntero lógico al segmento de datos */
-} RegName;
-
-/* Nombres legibles para el desensamblador (-d) */
 static const char* regStr[32] = {
-    [REG_IP]  = "IP",  [REG_OPC] = "OPC", [REG_OP1] = "OP1", [REG_OP2] = "OP2",
-    [REG_LAR] = "LAR", [REG_MAR] = "MAR", [REG_MBR] = "MBR",
-    [REG_EAX] = "EAX", [REG_EBX] = "EBX", [REG_ECX] = "ECX",
-    [REG_EDX] = "EDX", [REG_EEX] = "EEX", [REG_EFX] = "EFX",
-    [REG_AC]  = "AC",  [REG_CC]  = "CC",
-    [REG_CS]  = "CS",  [REG_DS]  = "DS"
+    "IP",        // 0  - Puntero de instrucción
+    "OPC",       // 1  - Código de operación
+    "OP1",       // 2  - Operando 1
+    "OP2",       // 3  - Operando 2
+    "LAR",       // 4  - Logic Address Register
+    "MAR",       // 5  - Memory Address Register
+    "MBR",       // 6  - Memory Buffer Register
+    "RESERVED",  // 7  
+    "RESERVED",  // 8  
+    "RESERVED",  // 9  
+    "EAX",       // 10 
+    "EBX",       // 11
+    "ECX",       // 12  
+    "EDX",       // 13 - Registros de propósito general (10 a 15)
+    "EEX",       // 14  
+    "EFX",       // 15 
+    "AC",        // 16 - Acumulador
+    "CC",        // 17 - Código de condición (NZCV)
+    "RESERVED",  // 18 
+    "RESERVED",  // 19 
+    "RESERVED",  // 20 
+    "RESERVED",  // 21 
+    "RESERVED",  // 22 
+    "RESERVED",  // 23 
+    "RESERVED",  // 24 
+    "RESERVED",  // 25 
+    "CS",        // 26 - Code Segment
+    "DS",        // 27 - Data Segment
+    "RESERVED",  // 28 
+    "RESERVED",  // 29 
+    "RESERVED",  // 30 
+    "RESERVED"   // 31 
 };
 
 /* ========================================================================= */
