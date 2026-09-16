@@ -3,18 +3,15 @@
 #include <stdint.h>
 #include <string.h>
 
-/* ========================================================================= */
-/* CONSTANTES Y CONFIGURACIÓN DE HARDWARE (MV1 - VERSIÓN 2026)               */
-/* ========================================================================= */
+
+/* CONSTANTES Y CONFIGURACIÓN DE HARDWARE */
 
 #define RAM_SIZE       16384    /* Memoria principal fija de 16 KiB */
 #define SEG_AMOUNT     8        /* Entradas en la tabla de descriptores */
 #define HEADER_SIZE    8        /* Cabecera del archivo binario .vmx */
-#define ENTRY_INACTIVE 0xFFFF   /* Valor indicador de segmento inactivo (-1) */
 
-/* ========================================================================= */
 /* ENUMERACIONES (Identificadores de registros según consigna 2026)          */
-/* ========================================================================= */
+
 
 typedef enum {
     /* Instrucción y control (0..3) */
@@ -70,10 +67,54 @@ static const char* regStr[32] = {
     "RESERVED"  // 31
 };
 
+/* ENUMERACIÓN DE INSTRUCCIONES (Opcodes 2026) */
+typedef enum {
+    SYS = 0x00, JMP, JP, JN, JZ, JC, JV, JNP, JNN, JNZ, NOT,
+    STOP = 0x0F,
+    MOV = 0x10, ADD, SUB, MUL, DIV, CMP,
+    AND = 0x16, OR, XOR, SWAP,
+    SHL = 0x1A, SHR, SAR,
+    LDL = 0x1D, LDH, RND
+} OpCode;
 
-/* ========================================================================= */
-/* ESTRUCTURAS DEL ESTADO DE LA MÁQUINA VIRTUAL                              */
-/* ========================================================================= */
+/* Vector de mnemónicos para el desensamblador (-d) */
+static const char* opStr[32] = {
+    "SYS",      /* 0x00 */
+    "JMP",      /* 0x01 */
+    "JP",       /* 0x02 */
+    "JN",       /* 0x03 */
+    "JZ",       /* 0x04 */
+    "JC",       /* 0x05 */
+    "JV",       /* 0x06 */
+    "JNP",      /* 0x07 */
+    "JNN",      /* 0x08 */
+    "JNZ",      /* 0x09 */
+    "NOT",      /* 0x0A */
+    "---",      /* 0x0B (Inválido/Vacío) */
+    "---",      /* 0x0C (Inválido/Vacío) */
+    "---",      /* 0x0D (Inválido/Vacío) */
+    "---",      /* 0x0E (Inválido/Vacío) */
+    "STOP",     /* 0x0F */
+    "MOV",      /* 0x10 */
+    "ADD",      /* 0x11 */
+    "SUB",      /* 0x12 */
+    "MUL",      /* 0x13 */
+    "DIV",      /* 0x14 */
+    "CMP",      /* 0x15 */
+    "AND",      /* 0x16 */
+    "OR",       /* 0x17 */
+    "XOR",      /* 0x18 */
+    "SWAP",     /* 0x19 */
+    "SHL",      /* 0x1A */
+    "SHR",      /* 0x1B */
+    "SAR",      /* 0x1C */
+    "LDL",      /* 0x1D */
+    "LDH",      /* 0x1E */
+    "RND"       /* 0x1F */
+};
+
+/* ESTRUCTURAS DEL ESTADO DE LA MÁQUINA VIRTUAL*/
+
 
 /* Descriptor de segmento: define la ubicación física y tamaño en RAM */
 typedef struct {
@@ -89,6 +130,9 @@ typedef struct {
     int       errorFlag;           /* Estado de error que detiene la máquina */
 } TMV;
 
+
+
+
 /* ========================================================================= */
 /* FUNCIONES DE INICIALIZACIÓN Y CARGA                                       */
 /* ========================================================================= */
@@ -102,27 +146,31 @@ typedef struct {
  * - Las entradas 2 a 7 quedan inactivas con valor -1 (0xFFFF).
  */
 void inicializarSegmentosYRegistros(TMV* mv, uint16_t tamCod) {
-    // 1. Marcar todos los segmentos como inactivos (0xFFFF)
+    // 1. Limpiar memoria física completa (RAM) a 0
+    memset(mv->mem, 0, sizeof(mv->mem));
+
+    // 2. Marcar todos los segmentos como inactivos (0xFFFF)
     for (int i = 0; i < SEG_AMOUNT; i++) {
-        mv->seg[i].base = ENTRY_INACTIVE;
-        mv->seg[i].size = ENTRY_INACTIVE;
+        mv->seg[i].base = 0xFFFF;
+        mv->seg[i].size = 0xFFFF;
     }
 
-    // 2. Configurar Segmento de Código (Entrada 0)
+    // 3. Configurar Segmento de Código (Entrada 0)
     mv->seg[0].base = 0;
     mv->seg[0].size = tamCod;
 
-    // 3. Configurar Segmento de Datos (Entrada 1)
+    // 4. Configurar Segmento de Datos (Entrada 1)
     mv->seg[1].base = tamCod;
     mv->seg[1].size = RAM_SIZE - tamCod;
 
-    // 4. Limpiar todos los registros a 0
+    // 5. Limpiar registros y banderas
     memset(mv->reg, 0, sizeof(mv->reg));
+    mv->errorFlag = 0;
 
-    // 5. Configurar punteros lógicos (16 bits segmento | 16 bits offset)
-    mv->reg[REG_CS] = 0x00000000;              /* Segmento 0, Offset 0 */
-    mv->reg[REG_DS] = 0x00010000;              /* Segmento 1, Offset 0 */
-    mv->reg[REG_IP] = mv->reg[REG_CS];         /* El punto de entrada arranca en CS */
+    // 6. Configurar punteros lógicos (16 bits segmento | 16 bits offset)
+    mv->reg[CS] = 0x00000000;              /* Segmento 0, Offset 0 */
+    mv->reg[DS] = 0x00010000;              /* Segmento 1, Offset 0 */
+    mv->reg[IP] = mv->reg[CS];             /* El punto de entrada arranca en CS */
 }
 
 /**
