@@ -161,3 +161,42 @@ int cargarArchivo(TMV* mv, const char* nombreArch) {
     fclose(arch);
     return 1;
 }
+
+// Función que traduce una dirección lógica a física y valida los límites.
+// Retorna la dirección física (>= 0) o -1 si ocurre un Fallo de Segmento.
+int32_t traducirDireccion(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes_acceso) {
+    
+    // 1. Extraemos el índice del segmento (16 bits más significativos) y el offset (16 bits menos significativos).
+    uint16_t indice_seg = (dir_logica >> 16) & 0xFFFF;
+    uint16_t offset = dir_logica & 0xFFFF;
+
+    // 2. Verificamos que el segmento apuntado no exceda las entradas de la tabla (0 a 7).
+    if (indice_seg >= SEG_AMOUNT) {
+        return -1; // Error: Fallo de segmento
+    }
+
+    // 3. Verificamos que el segmento no apunte a una entrada inactiva (-1 o 0xFFFF).
+    if (mv->seg[indice_seg].base == ENTRY_INACTIVE) {
+        return -1; // Error: Fallo de segmento
+    }
+
+    uint32_t dir_base = mv->seg[indice_seg].base;
+    uint32_t tamano_seg = mv->seg[indice_seg].size;
+
+    // 4. Calculamos la Dirección Física real (Base + Offset)[cite: 2].
+    uint32_t dir_fisica = dir_base + offset;
+
+    // 5. Calculamos los límites para proteger la memoria[cite: 4].
+    uint32_t limite_segmento = dir_base + tamano_seg;
+    uint32_t limite_acceso = dir_fisica + cant_bytes_acceso;
+
+    // 6. Verificamos las dos condiciones obligatorias de protección de memoria[cite: 4].
+    //    a) Dirección Base <= Dirección Física
+    //    b) Límite del Segmento >= Límite de Acceso
+    if (dir_fisica < dir_base || limite_acceso > limite_segmento) {
+        return -1; // Error: Fallo de segmento por desbordamiento
+    }
+
+    // Si pasó todas las validaciones de seguridad, devolvemos la dirección física lista para usar en la RAM.
+    return (int32_t)dir_fisica;
+} 
