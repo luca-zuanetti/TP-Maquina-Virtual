@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include "instrucciones.h"
 #include "mv.h"  // <-- IMPORTANTE: Incluimos nuestro nuevo contrato
 
 /* ========================================================================= */
@@ -160,10 +161,10 @@ void ejecutarMV(TMV* mv) {
         mv->reg[OP2] = (tipo_opB << 24);
         
         uint32_t offset_lectura = 1; 
-
+        int32_t valorB = 0;
+        int32_t valorA = 0;
         // LECTURA DEL OPERANDO B
         if (tipo_opB > 0) {
-            int32_t valorB = 0;
             for (int i = 0; i < tipo_opB; i++) {
                 int32_t dir_fis = traducirDireccion(mv, mv->reg[IP] + offset_lectura, 1);
                 if (dir_fis == -1) {
@@ -180,7 +181,6 @@ void ejecutarMV(TMV* mv) {
 
         // LECTURA DEL OPERANDO A
         if (tipo_opA > 0) {
-            int32_t valorA = 0;
             for (int i = 0; i < tipo_opA; i++) {
                 int32_t dir_fis = traducirDireccion(mv, mv->reg[IP] + offset_lectura, 1);
                 if (dir_fis == -1) {
@@ -201,6 +201,22 @@ void ejecutarMV(TMV* mv) {
         
         mv->reg[IP] += offset_lectura;
 
+        // =====================================================================
+        // ETAPA 5: EJECUCIÓN USANDO LA TABLA DE DESPACHO
+        // =====================================================================
+
+        if (opcode >= 32 || tablaInstrucciones[opcode] == NULL) {
+            printf("Error: Instruccion invalida o no implementada (opcode %02X)\n", opcode);
+            mv->errorFlag = 1;
+            break;
+        }
+
+        // Ejecuta directamente la función correspondiente
+        tablaInstrucciones[opcode](mv, tipo_opA, valorA, tipo_opB, valorB);
+
+        if (mv->errorFlag) {
+            break; // Si hubo un error (como división por cero o fallo de segmento), corta la ejecución
+        }
     } 
 }
 
@@ -217,14 +233,16 @@ int main(int argc, char** argv) {
         return 1; // El error ya lo imprime la función de carga
     }
 
+
+
+    inicializarTablaInstrucciones();
+
     // Verificamos si el usuario pasó el flag de desensamblador (-d)
     if (argc == 3 && strcmp(argv[2], "-d") == 0) {
         printf("Iniciando Desensamblador...\n");
         ejecutarDisassembler(&mv);
-    } else {
         // Ejecución normal de la máquina
-        ejecutarMV(&mv);
-    }
+    ejecutarMV(&mv);
 
     return 0;
 }
