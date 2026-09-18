@@ -1,0 +1,32 @@
+# Registro de Cambios (Changelog)
+
+Todos los cambios notables realizados en este proyecto serán documentados en este archivo.
+
+## [1.1.0] - 2026-09-18
+
+### Añadido
+- Simulación del bus de datos con actualización automática de los registros LAR, MAR y MBR en cada lectura y escritura de memoria física.
+- Desensamblado limpio y alineado a 6 bytes máximos de instrucción en `dissasembler.c` conforme al formato estricto exigido por la cátedra.
+- Manejo de finalización limpia del ciclo de ejecución al alcanzar el límite del segmento de código o mediante la instrucción STOP (IP = 0xFFFFFFFF).
+
+### Corregido
+- Resolución de operandos de tipo memoria: cálculo correcto de la dirección lógica a partir del registro base y el desplazamiento relativo [reg + offset].
+- Despacho de la llamada al sistema SYS: el tipo de servicio (1: READ, 2: WRITE) ahora se obtiene del operando A, utilizando el registro EAX exclusivamente como máscara de formatos de salida/entrada.
+- Condición de salto en `op_jp`: ahora evalúa estrictamente que tanto el flag N como el flag Z se encuentren apagados (resultado mayor a cero).
+- Sintaxis y flujo en `main.c`: corrección de llaves de cierre y ejecución secuencial del desensamblador (-d) previa al inicio de la máquina virtual.
+
+### Eliminado
+- Inclusión residual de `instrucciones.h` en `main.c` y documentación técnica.
+
+## [1.0.0] - 2026-09-18
+
+### Añadido
+- Constantes hexadecimales de 32 bits en `mv.h` para los flags del registro CC (`CC_N`, `CC_Z`, `CC_C`, `CC_V`).
+- Definición centralizada del tipo de función `InstruccionFunc` y de la tabla de despacho `tablaInstrucciones[32]` en `mv.h`.
+
+### Modificado
+- Reubicación de las máscaras de banderas hacia `mv.h` para que ocupen los bits 31 a 28.
+- Actualización de la enumeración de registros en `mv.h` conforme al mapa de hardware 2026 (`IP = 0`, `LAR = 4`, etc.).
+
+### Eliminado
+- Archivo de cabecera redundante `instrucciones.h`, unificando el contrato global de hardware y operaciones en `mv.h`.
