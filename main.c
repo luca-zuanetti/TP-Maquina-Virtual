@@ -2,136 +2,24 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include "mv.h"  // <-- IMPORTANTE: Incluimos nuestro nuevo contrato
 
 /* ========================================================================= */
-/* CONSTANTES Y CONFIGURACIÓN DE HARDWARE (MV1 - VERSIÓN 2026)               */
+/* DEFINICIÓN DE DICCIONARIOS (Sin la palabra 'static')                      */
 /* ========================================================================= */
-
-#define RAM_SIZE       16384    /* Memoria principal fija de 16 KiB */
-#define SEG_AMOUNT     8        /* Entradas en la tabla de descriptores */
-#define HEADER_SIZE    8        /* Cabecera del archivo binario .vmx */
-#define ENTRY_INACTIVE 0xFFFF   /* Valor indicador de segmento inactivo (-1) */
-
-/* ========================================================================= */
-/* ENUMERACIONES Y DICCIONARIOS                                              */
-/* ========================================================================= */
-
-typedef enum {
-    /* Instrucción y control (0..3) */
-    IP = 0, OPC, OP1, OP2,
-
-    /* Acceso a memoria / Bus (4..6) */
-    LAR = 4, MAR, MBR,
-
-    /* Propósito general (10..15) */
-    EAX = 10, EBX, ECX, EDX, EEX, EFX,
-
-    /* Acumulador - Cod. de condicion (16..17) */
-    AC = 16,
-    CC = 17,
-
-    /* Punteros de segmento (26..27) */
-    CS = 26, DS
-} RegName;
-
-static const char* regStr[32] = {
-    "IP",       // 0  - Puntero de instrucción
-    "OPC",      // 1  - Código de operación
-    "OP1",      // 2  - Operando 1
-    "OP2",      // 3  - Operando 2
-    "LAR",      // 4  - Logic Address Register
-    "MAR",      // 5  - Memory Address Register
-    "MBR",      // 6  - Memory Buffer Register
-    "RESERVED", // 7  
-    "RESERVED", // 8  
-    "RESERVED", // 9  
-    "EAX",      // 10 
-    "EBX",      // 11
-    "ECX",      // 12  
-    "EDX",      // 13 - Registros de propósito general (10 a 15)
-    "EEX",      // 14  
-    "EFX",      // 15 
-    "AC",       // 16 - Acumulador
-    "CC",       // 17 - Código de condición (NZCV)
-    "RESERVED", // 18 
-    "RESERVED", // 19 
-    "RESERVED", // 20 
-    "RESERVED", // 21 
-    "RESERVED", // 22 
-    "RESERVED", // 23 
-    "RESERVED", // 24 
-    "RESERVED", // 25 
-    "CS",       // 26 - Code Segment
-    "DS",       // 27 - Data Segment
-    "RESERVED", // 28 
-    "RESERVED", // 29 
-    "RESERVED", // 30 
-    "RESERVED"  // 31 
+const char* regStr[32] = {
+    "IP", "OPC", "OP1", "OP2", "LAR", "MAR", "MBR", "RESERVED", 
+    "RESERVED", "RESERVED", "EAX", "EBX", "ECX", "EDX", "EEX", "EFX",
+    "AC", "CC", "RESERVED", "RESERVED", "RESERVED", "RESERVED", 
+    "RESERVED", "RESERVED", "RESERVED", "RESERVED", "CS", "DS", 
+    "RESERVED", "RESERVED", "RESERVED", "RESERVED"
 };
 
-/* ENUMERACIÓN DE INSTRUCCIONES (Opcodes 2026) */
-typedef enum {
-    SYS = 0x00, JMP, JP, JN, JZ, JC, JV, JNP, JNN, JNZ, NOT,
-    STOP = 0x0F,
-    MOV = 0x10, ADD, SUB, MUL, DIV, CMP,
-    AND = 0x16, OR, XOR, SWAP,
-    SHL = 0x1A, SHR, SAR,
-    LDL = 0x1D, LDH, RND
-} OpCode;
-
-/* Vector de mnemónicos para el desensamblador (-d) */
-static const char* opStr[32] = {
-    "SYS",      /* 0x00 */
-    "JMP",      /* 0x01 */
-    "JP",       /* 0x02 */
-    "JN",       /* 0x03 */
-    "JZ",       /* 0x04 */
-    "JC",       /* 0x05 */
-    "JV",       /* 0x06 */
-    "JNP",      /* 0x07 */
-    "JNN",      /* 0x08 */
-    "JNZ",      /* 0x09 */
-    "NOT",      /* 0x0A */
-    "---",      /* 0x0B (Inválido/Vacío) */
-    "---",      /* 0x0C (Inválido/Vacío) */
-    "---",      /* 0x0D (Inválido/Vacío) */
-    "---",      /* 0x0E (Inválido/Vacío) */
-    "STOP",     /* 0x0F */
-    "MOV",      /* 0x10 */
-    "ADD",      /* 0x11 */
-    "SUB",      /* 0x12 */
-    "MUL",      /* 0x13 */
-    "DIV",      /* 0x14 */
-    "CMP",      /* 0x15 */
-    "AND",      /* 0x16 */
-    "OR",       /* 0x17 */
-    "XOR",      /* 0x18 */
-    "SWAP",     /* 0x19 */
-    "SHL",      /* 0x1A */
-    "SHR",      /* 0x1B */
-    "SAR",      /* 0x1C */
-    "LDL",      /* 0x1D */
-    "LDH",      /* 0x1E */
-    "RND"       /* 0x1F */
+const char* opStr[32] = {
+    "SYS", "JMP", "JP", "JN", "JZ", "JC", "JV", "JNP", "JNN", "JNZ", "NOT",
+    "---", "---", "---", "---", "STOP", "MOV", "ADD", "SUB", "MUL", "DIV", 
+    "CMP", "AND", "OR", "XOR", "SWAP", "SHL", "SHR", "SAR", "LDL", "LDH", "RND"
 };
-
-/* ========================================================================= */
-/* ESTRUCTURAS DEL ESTADO DE LA MÁQUINA VIRTUAL                              */
-/* ========================================================================= */
-
-/* Descriptor de segmento: define la ubicación física y tamaño en RAM */
-typedef struct {
-    uint16_t base;  /* Dirección física de inicio */
-    uint16_t size;  /* Cantidad de bytes que ocupa el segmento */
-} TableSeg;
-
-/* Estado completo de la máquina virtual (TMV) */
-typedef struct {
-    uint8_t   mem[RAM_SIZE];       /* Memoria física de 16 KiB (bytes sin signo) */
-    int32_t   reg[32];             /* 32 registros de 32 bits con signo */
-    TableSeg  seg[SEG_AMOUNT];     /* Tabla de 8 descriptores de segmentos */
-    int       errorFlag;           /* Estado de error que detiene la máquina */
-} TMV;
 
 /* ========================================================================= */
 /* FUNCIONES DE INICIALIZACIÓN Y CARGA                                       */
@@ -314,4 +202,29 @@ void ejecutarMV(TMV* mv) {
         mv->reg[IP] += offset_lectura;
 
     } 
+}
+
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        printf("Uso: %s filename.vmx [-d]\n", argv[0]);
+        return 1;
+    }
+
+    TMV mv; // Instanciamos nuestra Máquina Virtual
+    
+    // Intentamos cargar el archivo binario
+    if (!cargarArchivo(&mv, argv[1])) {
+        return 1; // El error ya lo imprime la función de carga
+    }
+
+    // Verificamos si el usuario pasó el flag de desensamblador (-d)
+    if (argc == 3 && strcmp(argv[2], "-d") == 0) {
+        printf("Iniciando Desensamblador...\n");
+        ejecutarDisassembler(&mv);
+    } else {
+        // Ejecución normal de la máquina
+        ejecutarMV(&mv);
+    }
+
+    return 0;
 }
