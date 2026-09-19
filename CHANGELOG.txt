@@ -1,0 +1,41 @@
+# Registro de Cambios (Changelog)
+
+Todos los cambios notables realizados en este proyecto serán documentados en este archivo.
+
+## [1.1.0] - 2026-09-18
+
+### Añadido
+- Simulación del bus de datos con actualización automática de los registros LAR, MAR y MBR en cada lectura y escritura de memoria física.
+- Desensamblado limpio y alineado a 6 bytes máximos de instrucción en `dissasembler.c` conforme al formato estricto exigido por la cátedra.
+- Manejo de finalización limpia del ciclo de ejecución al alcanzar el límite del segmento de código o mediante la instrucción STOP (IP = 0xFFFFFFFF).
+
+### Corregido
+- Resolución de operandos de tipo memoria: cálculo correcto de la dirección lógica a partir del registro base y el desplazamiento relativo [reg + offset].
+- Despacho de la llamada al sistema SYS: el tipo de servicio (1: READ, 2: WRITE) ahora se obtiene del operando A, utilizando el registro EAX exclusivamente como máscara de formatos de salida/entrada.
+- Condición de salto en `op_jp`: ahora evalúa estrictamente que tanto el flag N como el flag Z se encuentren apagados (resultado mayor a cero).
+- Sintaxis y flujo en `main.c`: corrección de llaves de cierre y ejecución secuencial del desensamblador (-d) previa al inicio de la máquina virtual.
+
+### Eliminado
+- Inclusión residual de `instrucciones.h` en `main.c` y documentación técnica.
+
+## [1.0.0] - 2026-09-18
+
+### Añadido
+- Constantes hexadecimales de 32 bits en `mv.h` para los flags del registro CC (`CC_N`, `CC_Z`, `CC_C`, `CC_V`).
+- Definición centralizada del tipo de función `InstruccionFunc` y de la tabla de despacho `tablaInstrucciones[32]` en `mv.h`.
+
+### Modificado
+- Reubicación de las máscaras de banderas hacia `mv.h` para que ocupen los bits 31 a 28.
+- Actualización de la enumeración de registros en `mv.h` conforme al mapa de hardware 2026 (`IP = 0`, `LAR = 4`, etc.).
+
+### Eliminado
+- Archivo de cabecera redundante `instrucciones.h`, unificando el contrato global de hardware y operaciones en `mv.h`.
+
+## [1.1.1] - 2026-09-19
+
+### Corregido
+- Refactorización de la Etapa 2 (Decode) en `main.c` y `dissasembler.c`: Se eliminó el corrimiento de bits estático para la extracción de tipos de operandos.
+- Decodificación dinámica de aridad: Ahora el motor evalúa el rango del OpCode para determinar la cantidad de operandos (0, 1 o 2) antes de aplicar las máscaras[cite: 4]. Esto respeta la arquitectura donde las instrucciones de un solo operando codifican el tipo de su único operando en los 2 bits más altos (bits 6 y 7).
+- Resolución de fallos en instrucciones de un operando (`SYS`, `JMP`, `NOT`): Al corregir la decodificación, el motor extrae correctamente el valor hacia el Operando A en lugar de generar un Operando B fantasma y dejar el A en cero.
+- Corrección visual en el Desensamblador (-d): Las instrucciones de un operando ahora se renderizan respetando el formato visual oficial, sin mostrar artefactos ni operandos adicionales vacíos[cite: 3].
+- Optimización de compilación: Se resolvió un warning lógico (`-Wtype-limits`) emitido por GCC al evaluar topes mínimos redundantes en variables sin signo (`uint8_t`), logrando una compilación limpia bajo banderas estrictas (`-Wall -Wextra`).
