@@ -30,3 +30,12 @@ Todos los cambios notables realizados en este proyecto serán documentados en es
 
 ### Eliminado
 - Archivo de cabecera redundante `instrucciones.h`, unificando el contrato global de hardware y operaciones en `mv.h`.
+
+## [1.1.1] - 2026-09-19
+
+### Corregido
+- Refactorización de la Etapa 2 (Decode) en `main.c` y `dissasembler.c`: Se eliminó el corrimiento de bits estático para la extracción de tipos de operandos.
+- Decodificación dinámica de aridad: Ahora el motor evalúa el rango del OpCode para determinar la cantidad de operandos (0, 1 o 2) antes de aplicar las máscaras[cite: 4]. Esto respeta la arquitectura donde las instrucciones de un solo operando codifican el tipo de su único operando en los 2 bits más altos (bits 6 y 7).
+- Resolución de fallos en instrucciones de un operando (`SYS`, `JMP`, `NOT`): Al corregir la decodificación, el motor extrae correctamente el valor hacia el Operando A en lugar de generar un Operando B fantasma y dejar el A en cero.
+- Corrección visual en el Desensamblador (-d): Las instrucciones de un operando ahora se renderizan respetando el formato visual oficial, sin mostrar artefactos ni operandos adicionales vacíos[cite: 3].
+- Optimización de compilación: Se resolvió un warning lógico (`-Wtype-limits`) emitido por GCC al evaluar topes mínimos redundantes en variables sin signo (`uint8_t`), logrando una compilación limpia bajo banderas estrictas (`-Wall -Wextra`).

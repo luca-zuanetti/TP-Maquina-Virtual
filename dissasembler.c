@@ -54,8 +54,19 @@ void ejecutarDisassembler(TMV* mv) {
         
         // Decodificación del byte de control
         uint8_t opcode   = primer_byte & 0x1F;
-        uint8_t tipo_opA = (primer_byte >> 4) & 0x03;
-        uint8_t tipo_opB = (primer_byte >> 6) & 0x03;
+        uint8_t tipo_opA = 0;
+        uint8_t tipo_opB = 0;
+
+        if (opcode >= 0x10 && opcode <= 0x1F) {
+            tipo_opA = (primer_byte >> 4) & 0x03;
+            tipo_opB = (primer_byte >> 6) & 0x03;
+        } else if (opcode <= 0x0A) {
+            tipo_opA = (primer_byte >> 6) & 0x03;
+            tipo_opB = 0;
+        } else if (opcode == 0x0F) {
+            tipo_opA = 0;
+            tipo_opB = 0;
+        }
         
         uint32_t offset_lectura = 1;
         int32_t valorB = 0;

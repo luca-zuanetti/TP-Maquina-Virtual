@@ -190,8 +190,25 @@ void ejecutarMV(TMV* mv) {
         // 2. DECODE: Extracción de Opcode y tipos de operando
         // ---------------------------------------------------------------------
         uint8_t opcode   = primer_byte & 0x1F;        // Bits 0..4
-        uint8_t tipo_opA = (primer_byte >> 4) & 0x03; // Bits 4..5
-        uint8_t tipo_opB = (primer_byte >> 6) & 0x03; // Bits 6..7
+        uint8_t tipo_opA = 0;
+        uint8_t tipo_opB = 0;
+
+        // Evaluación de aridad según el rango del OpCode
+        if (opcode >= 0x10 && opcode <= 0x1F) {
+            // 2 Operandos (MOV a RND): A en bits 4..5, B en bits 6..7
+            tipo_opA = (primer_byte >> 4) & 0x03;
+            tipo_opB = (primer_byte >> 6) & 0x03;
+        } 
+        else if (opcode <= 0x0A) {
+            // 1 Operando (SYS a NOT): Único operando (A) en bits 6..7
+            tipo_opA = (primer_byte >> 6) & 0x03;
+            tipo_opB = 0;
+        } 
+        else if (opcode == 0x0F) {
+            // 0 Operandos (STOP)
+            tipo_opA = 0;
+            tipo_opB = 0;
+        }
 
         // Los registros de instrucción almacenan la información decodificada
         mv->reg[OPC] = opcode;
