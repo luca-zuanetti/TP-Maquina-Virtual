@@ -72,8 +72,35 @@ Toda dirección lógica se estructura en 32 bits: `[16 bits Segmento | 16 bits D
 
 ---
 
-## 6. Compilación y Uso
+## 6. Requisitos, Compilación y Uso
 
-### Compilación con GCC:
+### 6.1 Sistema Operativo y Entorno:
+- **SO:** Windows 10.
+- **Entorno:** Desarrollado y testeado en la terminal integrada de Visual Studio Code utilizando **MSYS2**.
+
+### 6.2 Requisitos Previos:
+- Entorno **MSYS2** instalado para proveer la colección de compiladores GNU.
+- Compilador **GCC** (compatible con el estándar C99) instalado a través de MSYS2 y configurado correctamente en las variables de entorno (`PATH`) del sistema.
+
+### 6.3 Instrucciones de Uso:
+
+1. Traducción del código fuente (Assembler a Código Máquina):
+Antes de utilizar la máquina virtual, se debe traducir el programa escrito en lenguaje Assembler (`.asm`) al formato binario ejecutable (`.vmx`) utilizando el traductor provisto por la cátedra. Desde la terminal, ejecutar:
 ```bash
-gcc -Wall -Wextra -std=c99 main.c instrucciones.c dissasembler.c -o vmx
+.\vmt.exe programa.asm
+```
+2. Compilación de la Máquina Virtual:
+Para generar el archivo ejecutable del emulador a partir de los códigos fuente en C, utilizar GCC con banderas estrictas:
+```bash
+gcc -Wall -Wextra -std=c99 main.c instrucciones.c dissasembler.c -o vmx.exe
+```
+3. Ejecución de la Máquina Virtual:
+Para inicializar la máquina, cargar en memoria y correr el programa traducido, ejecutar el emulador pasándole el archivo binario como argumento:
+```bash
+./vmx.exe programa.vmx
+```
+4. Ejecución con Desensamblador (Disassembler):
+Si se desea forzar a la máquina virtual a mostrar por consola la traza del código desensamblado (dirección física, volcado hexadecimal y mnemónicos con sus operandos correspondientes), se debe agregar el flag opcional -d al final del comando:
+```bash
+./vmx.exe programa.vmx -d
+```
