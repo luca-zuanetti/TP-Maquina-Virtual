@@ -304,10 +304,6 @@ void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
             printf("\n");
         }
     } 
-    else {
-        printf("Error: Servicio SYS desconocido (%d).\n", nro_servicio);
-        mv->errorFlag = 1;
-    }
 }
 
 // 0x01: JMP (Salto Incondicional)
