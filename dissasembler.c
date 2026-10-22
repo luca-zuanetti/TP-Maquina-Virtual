@@ -44,8 +44,9 @@ static void imprimirOperando(uint8_t tipo, int32_t valor) {
  * Formato: [XXXX] XX XX XX XX | MNEM OP_A, OP_B
  */
 void ejecutarDisassembler(TMV* mv) {
-    uint32_t baseCod = mv->seg[0].base;
-    uint32_t tamCod  = mv->seg[0].size;
+    uint16_t segCod  = (uint16_t)(((uint32_t)mv->reg[CS] >> 16) & 0xFFFF);
+    uint32_t baseCod = mv->seg[segCod].base;
+    uint32_t tamCod  = mv->seg[segCod].size;
     uint32_t offset_actual = 0;
     
     while (offset_actual < tamCod) {
