@@ -8,8 +8,8 @@ Facultad de Ingeniería - Universidad Nacional de Mar del Plata (UNMDP)
 Este proyecto implementa un emulador o Máquina Virtual capaz de ejecutar programas compilados a lenguaje máquina con extensión `.vmx`, traducidos por la herramienta `vmt` provista por la cátedra a partir de archivos fuente Assembler (`.asm`).
 
 El emulador simula a bajo nivel los subsistemas esenciales de un computador:
-- Memoria RAM física de direccionamiento lineal.
-- Segmentación de memoria mediante tabla de descriptores para Código y Datos.
+- Memoria RAM física de direccionamiento lineal y tamaño variable.
+- Segmentación de memoria mediante tabla de descriptores para hasta seis segmentos (PS, KS, CS, DS, ES y SS).
 - Banco de registros de propósito general, punteros y registros de control de bus.
 - Ciclo de instrucción estructurado en **Fetch**, **Decode**, **Update IP** y **Execute**.
 - Registro de Códigos de Condición (`CC`) con banderas aritmético-lógicas `NZCV`.
@@ -19,14 +19,19 @@ El emulador simula a bajo nivel los subsistemas esenciales de un computador:
 ## 2. Componentes de la Arquitectura
 
 ### 2.1 Memoria Principal (RAM)
-- Tamaño físico fijo de **16 KiB** (16.384 celdas de 1 byte).
-- Rango de direcciones físicas válidas: `0x0000` hasta `0x3FFF`.
+- Tamaño variable de **M KiB** indicado con el parámetro opcional `m=M` (por defecto **16 KiB**).
+- Se reserva dinámicamente (`calloc`) al iniciar y se libera al finalizar.
+- `M` debe estar entre **1 y 64 KiB**: la base y el tamaño de cada descriptor, y la dirección física de `MAR`, son de 16 bits, por lo que no es posible direccionar más de 64 KiB.
+- Rango de direcciones físicas válidas: `0x0000` hasta `M * 1024 - 1`.
 
 ### 2.2 Tabla de Descriptores de Segmentos
-Consta de 8 entradas de 32 bits (16 bits de dirección base física y 16 bits de tamaño en bytes):
-- **Entrada 0 (Segmento de Código - CS):** Base `0x0000`, tamaño determinado por la cabecera del binario `.vmx`.
-- **Entrada 1 (Segmento de Datos - DS):** Base física contigua al final del código, tamaño restante de la RAM (`16 KiB - tamCod`).
-- **Entradas 2 a 7 (Inactivas):** Marcadas con el valor de descriptor inactivo `-1` (`0xFFFF` en base y tamaño).
+Consta de 8 entradas de 32 bits (16 bits de dirección base física y 16 bits de tamaño en bytes).
+- Los segmentos se ubican de forma contigua en la RAM en el orden **PS, KS, CS, DS, ES, SS**.
+- Solo se crean entradas para los segmentos de tamaño mayor a cero, en el mismo orden que su ubicación física (por ejemplo, si no existen el Param Segment ni el Const Segment, el Code Segment ocupa la entrada 0).
+- El Code Segment es obligatorio, y en los ejecutables versión 2 también lo es el Stack Segment.
+- En los ejecutables versión 1 solo existen CS y DS (el Data Segment ocupa el resto de la memoria).
+- Si la suma de los segmentos supera la memoria principal, se informa **Memoria insuficiente** y no se ejecuta el programa.
+- Las entradas no utilizadas quedan inactivas, con `0xFFFF` en base y tamaño.
 
 ### 2.3 Banco de Registros (32 registros de 32 bits)
 | Índice | Mnemónico | Rol / Descripción |
@@ -38,11 +43,19 @@ Consta de 8 entradas de 32 bits (16 bits de dirección base física y 16 bits de
 | `4` | **LAR** | Dirección lógica del último acceso a memoria |
 | `5` | **MAR** | Cantidad de bytes en parte alta y dirección física en parte baja |
 | `6` | **MBR** | Búfer de datos leídos o escritos en memoria |
+| `7` | **SP** | Puntero al tope de la pila (inicia en `SS` + tamaño de la pila) |
+| `8` | **BP** | Puntero base de la pila (no requiere inicialización) |
 | `10..15` | **EAX..EFX** | Registros de propósito general para cómputo |
 | `16` | **AC** | Acumulador / Resto en división entera |
 | `17` | **CC** | Registro de Códigos de Condición |
-| `26` | **CS** | Puntero lógico base del segmento de código (`0x00000000`) |
-| `27` | **DS** | Puntero lógico base del segmento de datos (`0x00010000`) |
+| `26` | **CS** | Puntero al comienzo del Code Segment |
+| `27` | **DS** | Puntero al comienzo del Data Segment |
+| `28` | **ES** | Puntero al comienzo del Extra Segment |
+| `29` | **SS** | Puntero al comienzo del Stack Segment |
+| `30` | **KS** | Puntero al comienzo del Const Segment |
+| `31` | **PS** | Puntero al comienzo del Param Segment |
+
+Los punteros a segmento contienen `[16 bits entrada en la tabla | 16 bits offset 0]`. Si un segmento no existe, su registro queda cargado con `-1` (`0xFFFFFFFF`). Los índices 9 y 18 a 25 están reservados.
 
 ---
 
@@ -68,7 +81,7 @@ Toda dirección lógica se estructura en 32 bits: `[16 bits Segmento | 16 bits D
 - `mv.h`: Contrato global de arquitectura, estructuras `TMV` y `TableSeg`, definiciones de flags y prototipos.
 - `instrucciones.c`: Implementación de las 26 instrucciones, resolución de operandos (`[reg+offset]`), actualización del bus (`LAR`, `MAR`, `MBR`) y evaluación de flags `NZCV`.
 - `dissasembler.c`: Desensamblado de instrucciones en memoria principal respetando el formato visual oficial.
-- `main.c`: Lectura y validación de la cabecera `VMX26`, inicialización del sistema y ciclo de ejecución.
+- `main.c`: Reserva y liberación de la memoria principal, lectura y validación de la cabecera `VMX26` (versiones 1 y 2), ubicación de los segmentos, inicialización de registros y ciclo de ejecución.
 
 ---
 
@@ -103,4 +116,9 @@ Para inicializar la máquina, cargar en memoria y correr el programa traducido, 
 Si se desea forzar a la máquina virtual a mostrar por consola la traza del código desensamblado (dirección física, volcado hexadecimal y mnemónicos con sus operandos correspondientes), se debe agregar el flag opcional -d al final del comando:
 ```bash
 ./vmx.exe programa.vmx -d
+```
+5. Tamaño de la memoria principal:
+Para indicar el tamaño de la memoria en KiB (entre 1 y 64; por defecto 16), se agrega el parámetro opcional `m=M`:
+```bash
+./vmx.exe programa.vmx m=32
 ```

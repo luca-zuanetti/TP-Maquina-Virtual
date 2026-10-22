@@ -39,3 +39,28 @@ Todos los cambios notables realizados en este proyecto serán documentados en es
 - Resolución de fallos en instrucciones de un operando (`SYS`, `JMP`, `NOT`): Al corregir la decodificación, el motor extrae correctamente el valor hacia el Operando A en lugar de generar un Operando B fantasma y dejar el A en cero.
 - Corrección visual en el Desensamblador (-d): Las instrucciones de un operando ahora se renderizan respetando el formato visual oficial, sin mostrar artefactos ni operandos adicionales vacíos[cite: 3].
 - Optimización de compilación: Se resolvió un warning lógico (`-Wtype-limits`) emitido por GCC al evaluar topes mínimos redundantes en variables sin signo (`uint8_t`), logrando una compilación limpia bajo banderas estrictas (`-Wall -Wextra`).
+
+## [2.0.0-dev] - 2026-10-05
+
+### Añadido
+- Memoria principal de tamaño variable: se reserva dinámicamente según el parámetro `m=M` (en KiB, entre 1 y 64; por defecto 16 KiB).
+- Nuevos registros `SP` (7), `BP` (8), `ES` (28), `SS` (29), `KS` (30) y `PS` (31) en `mv.h` y en el diccionario `regStr`.
+- Ubicación contigua de hasta seis segmentos en el orden PS, KS, CS, DS, ES, SS, creando entradas en la tabla de descriptores solo para los segmentos de tamaño mayor a cero.
+- Inicialización de los punteros a segmento (`-1` para los segmentos inexistentes) y de `SP` en `SS` + tamaño de la pila.
+- Lectura de la cabecera `.vmx` versión 2 (18 bytes) con carga del Const Segment y del entry point, manteniendo compatibilidad con la versión 1.
+- Construcción del Param Segment a partir del flag `-p` (strings seguidos del arreglo `argv` de punteros de 4 bytes).
+- Parseo completo de la línea de comandos: `vmx [filename.vmx] [filename.vmi] [m=M] [-d] [-p param1 ... paramN]`.
+- Error "Memoria insuficiente" cuando los segmentos del proceso no entran en la memoria principal.
+
+### Modificado
+- El ciclo de ejecución y el desensamblador obtienen el Code Segment a partir del registro `CS` en lugar de asumir la entrada 0 de la tabla.
+
+### Corregido
+- `traducirDireccion` considera inactiva una entrada solo si base y tamaño valen `0xFFFF`, evitando un falso fallo de segmento para un segmento activo ubicado en la dirección física `0xFFFF` (memoria de 64 KiB).
+- `crearMemoria` valida por sí misma el tamaño (entre 1 y 64 KiB), ya que también recibirá el tamaño leído de la cabecera de un `.vmi`.
+- `TMV` se inicializa en cero en `main`, de modo que `mv.mem` comienza en `NULL` y `liberarMemoria` es seguro en cualquier salida.
+- El fetch verifica que la instrucción completa (byte de control y operandos) esté dentro del Code Segment antes de leerla; una instrucción incompleta produce un fallo de segmento en lugar de leer fuera del segmento o de la memoria reservada.
+- `cargarArchivo` rechaza los ejecutables sin Code Segment (y, en la versión 2, sin Stack Segment). Antes el registro CS quedaba en -1 y se indexaba la tabla de descriptores con la entrada 0xFFFF, provocando un fallo de segmentación del emulador.
+- `cargarArchivo` rechaza un entry point ubicado fuera del Code Segment, en lugar de finalizar la ejecución sin informar el error.
+- Casts explícitos a `uint16_t` al extraer índices de segmento y offsets (compilación limpia también con `-Wconversion` en esas líneas).
+- README actualizado: memoria de tamaño variable (`m=M`, 1 a 64 KiB), nuevos registros SP, BP, ES, SS, KS y PS, y ubicación de los segmentos en la tabla de descriptores.

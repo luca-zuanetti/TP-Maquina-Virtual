@@ -6,10 +6,12 @@
 /* ========================================================================= */
 /* CONSTANTES DE ARQUITECTURA                            */
 /* ========================================================================= */
-#define RAM_SIZE       16384    /* Memoria principal fija de 16 KiB (16384 bytes) */
-#define SEG_AMOUNT     8        /* Entradas en la tabla de descriptores de segmentos */
-#define HEADER_SIZE    8        /* Tamaño en bytes de la cabecera del archivo .vmx */
-#define ENTRY_INACTIVE 0xFFFF   /* Valor indicador de descriptor inactivo (-1) */
+#define MEM_DEFAULT_KIB 16      /* Tamaño por defecto de la memoria principal (m=M omitido) */
+#define MEM_MAX_KIB     64      /* Máximo direccionable con bases/offsets de 16 bits */
+#define SEG_AMOUNT      8       /* Entradas en la tabla de descriptores de segmentos */
+#define HEADER_SIZE_V1  8       /* Tamaño en bytes de la cabecera .vmx versión 1 */
+#define HEADER_SIZE_V2  18      /* Tamaño en bytes de la cabecera .vmx versión 2 */
+#define ENTRY_INACTIVE  0xFFFF  /* Valor indicador de descriptor inactivo (-1) */
 
 /* ========================================================================= */
 /* BANDERAS DEL REGISTRO CC (Bits 31 a 28 de los 32 bits)                    */
@@ -30,6 +32,8 @@ typedef enum {
     LAR = 4,    /* Registro de dirección lógica */
     MAR,        /* Registro de dirección física de memoria */
     MBR,        /* Registro de búfer de datos de memoria */
+    SP = 7,     /* Puntero al tope de la pila (Stack Pointer) */
+    BP = 8,     /* Puntero base de la pila (Base Pointer) */
     EAX = 10,   /* Registros de propósito general */
     EBX,
     ECX,
@@ -38,9 +42,26 @@ typedef enum {
     EFX,
     AC = 16,    /* Registro Acumulador */
     CC = 17,    /* Registro de Código de Condición */
-    CS = 26,    /* Registro base del Segmento de Código */
-    DS = 27     /* Registro base del Segmento de Datos */
+    CS = 26,    /* Puntero al comienzo del Code Segment */
+    DS = 27,    /* Puntero al comienzo del Data Segment */
+    ES = 28,    /* Puntero al comienzo del Extra Segment */
+    SS = 29,    /* Puntero al comienzo del Stack Segment */
+    KS = 30,    /* Puntero al comienzo del Const Segment */
+    PS = 31     /* Puntero al comienzo del Param Segment */
 } RegName;
+
+/* ========================================================================= */
+/* SEGMENTOS DEL PROCESO (en su orden físico obligatorio dentro de la RAM)   */
+/* ========================================================================= */
+typedef enum {
+    SEG_PARAM = 0,  /* Param Segment  -> PS */
+    SEG_CONST,      /* Const Segment  -> KS */
+    SEG_CODE,       /* Code Segment   -> CS */
+    SEG_DATA,       /* Data Segment   -> DS */
+    SEG_EXTRA,      /* Extra Segment  -> ES */
+    SEG_STACK,      /* Stack Segment  -> SS */
+    CANT_SEGMENTOS
+} SegProceso;
 
 /* ========================================================================= */
 /* ENUMERACIÓN DE CÓDIGOS DE OPERACIÓN (OPCODES)                             */
@@ -68,7 +89,8 @@ typedef struct {
 
 /* Estado global de la Máquina Virtual */
 typedef struct {
-    uint8_t   mem[RAM_SIZE];   /* Memoria física lineal de 16 KiB */
+    uint8_t*  mem;             /* Memoria física lineal (reservada dinámicamente) */
+    uint32_t  memSize;         /* Tamaño de la memoria física en bytes (M * 1024) */
     int32_t   reg[32];         /* Banco de 32 registros de 32 bits */
     TableSeg  seg[SEG_AMOUNT]; /* Tabla de descriptores de segmentos */
     int       errorFlag;       /* Bandera de control de errores (0 = OK, 1 = Error) */
@@ -96,8 +118,10 @@ extern const char* opStr[32];
 /* ========================================================================= */
 /* PROTOTIPOS DE FUNCIONES                                                   */
 /* ========================================================================= */
-void inicializarSegmentosYRegistros(TMV* mv, uint16_t tamCod);
-int cargarArchivo(TMV* mv, const char* nombreArch);
+int crearMemoria(TMV* mv, uint32_t tamKiB);
+void liberarMemoria(TMV* mv);
+int inicializarSegmentosYRegistros(TMV* mv, const uint32_t tamSeg[CANT_SEGMENTOS]);
+int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params);
 int32_t traducirDireccion(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes_acceso);
 void ejecutarMV(TMV* mv);
 void ejecutarDisassembler(TMV* mv);
