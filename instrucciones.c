@@ -20,35 +20,36 @@
  * @param dir_logica Dirección lógica compuesta por [Segmento:Offset].
  * @return int32_t   Valor de 32 bits leído con signo.
  */
-static int32_t leerMemoriaHardware(TMV* mv, uint32_t dir_logica) {
+static int32_t leerMemoriaHardware(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes) {
     // 1. El procesador coloca la dirección lógica en LAR
     mv->reg[LAR] = (int32_t)dir_logica;
 
-    // 2. La MMU traduce la dirección lógica a física y valida los límites del segmento
-    int32_t dir_fisica = traducirDireccion(mv, dir_logica, 4);
+     // 2. La MMU traduce la dirección lógica a física y valida los límites del segmento
+    int32_t dir_fisica = traducirDireccion(mv, dir_logica, cant_bytes);
+    
     if (dir_fisica < 0) {
-        printf("Error: Fallo de segmento en lectura (Dir Logica: 0x%08X).\n", dir_logica);
+        printf("Error: Fallo de segmento en lectura (Dir: 0x%08X).\n", dir_logica);
         mv->errorFlag = 1;
         return 0;
     }
 
     // 3. Se configura MAR:
-    //    - 16 bits superiores: cantidad de bytes transferidos (4)
+    //    - 16 bits superiores: cantidad de bytes transferidos
     //    - 16 bits inferiores: dirección física en la RAM
-    mv->reg[MAR] = (int32_t)((4U << 16) | ((uint32_t)dir_fisica & 0xFFFFU));
-
-    // 4. Lectura de los 4 bytes consecutivos en memoria física bajo orden Big Endian
-    //    (el byte más significativo reside en la dirección física menor)
-    uint32_t b0 = mv->mem[dir_fisica];
-    uint32_t b1 = mv->mem[dir_fisica + 1];
-    uint32_t b2 = mv->mem[dir_fisica + 2];
-    uint32_t b3 = mv->mem[dir_fisica + 3];
-
-    int32_t dato = (int32_t)((b0 << 24) | (b1 << 16) | (b2 << 8) | b3);
-
-    // 5. El dato resultante queda disponible en el registro MBR
+    mv->reg[MAR] = (int32_t)(((uint32_t)cant_bytes << 16) | ((uint32_t)dir_fisica & 0xFFFFU));
+    
+    int32_t dato = 0;
+    // Decodifica según la cantidad de bytes solicitada
+    if (cant_bytes == 1) {
+        dato = (int32_t)(int8_t)mv->mem[dir_fisica]; // Extensión de signo
+    } else if (cant_bytes == 2) {
+        dato = (int32_t)(int16_t)((mv->mem[dir_fisica] << 8) | mv->mem[dir_fisica + 1]);
+    } else { //Asume cant_bytes == 4
+        dato = (int32_t)((mv->mem[dir_fisica] << 24) | (mv->mem[dir_fisica + 1] << 16) |
+                         (mv->mem[dir_fisica + 2] << 8) | mv->mem[dir_fisica + 3]);
+    }
+    
     mv->reg[MBR] = dato;
-
     return dato;
 }
 
@@ -62,24 +63,33 @@ static int32_t leerMemoriaHardware(TMV* mv, uint32_t dir_logica) {
  * @param dir_logica Dirección lógica de destino [Segmento:Offset].
  * @param valor      Entero de 32 bits a escribir.
  */
-static void escribirMemoriaHardware(TMV* mv, uint32_t dir_logica, int32_t valor) {
+void escribirMemoriaHardware(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes, int32_t valor) {
     mv->reg[LAR] = (int32_t)dir_logica;
-
-    int32_t dir_fisica = traducirDireccion(mv, dir_logica, 4);
+    int32_t dir_fisica = traducirDireccion(mv, dir_logica, cant_bytes);
+    
     if (dir_fisica < 0) {
-        printf("Error: Fallo de segmento en escritura (Dir Logica: 0x%08X).\n", dir_logica);
-        mv->errorFlag = 1;
+        printf("Error: Fallo de segmento en escritura (Dir: 0x%08X).\n", dir_logica);
+        mv->errorFlag = 1; 
         return;
     }
-
-    mv->reg[MAR] = (int32_t)((4U << 16) | ((uint32_t)dir_fisica & 0xFFFFU));
+    
+    mv->reg[MAR] = (int32_t)(((uint32_t)cant_bytes << 16) | ((uint32_t)dir_fisica & 0xFFFFU));
     mv->reg[MBR] = valor;
 
-    // Descomposición del dato en 4 bytes (Big Endian)
-    mv->mem[dir_fisica]     = (uint8_t)((valor >> 24) & 0xFF);
-    mv->mem[dir_fisica + 1] = (uint8_t)((valor >> 16) & 0xFF);
-    mv->mem[dir_fisica + 2] = (uint8_t)((valor >> 8)  & 0xFF);
-    mv->mem[dir_fisica + 3] = (uint8_t)(valor         & 0xFF);
+    // Descompone el valor en memoria según los bytes indicados (big endian)
+    if (cant_bytes == 1) {
+        mv->mem[dir_fisica] = (uint8_t)(valor & 0xFF);
+    } 
+    else if (cant_bytes == 2) {
+        mv->mem[dir_fisica]     = (uint8_t)((valor >> 8) & 0xFF);
+        mv->mem[dir_fisica + 1] = (uint8_t)(valor & 0xFF);
+    } 
+    else { // Asume cant_bytes == 4
+        mv->mem[dir_fisica]     = (uint8_t)((valor >> 24) & 0xFF);
+        mv->mem[dir_fisica + 1] = (uint8_t)((valor >> 16) & 0xFF);
+        mv->mem[dir_fisica + 2] = (uint8_t)((valor >> 8)  & 0xFF);
+        mv->mem[dir_fisica + 3] = (uint8_t)(valor         & 0xFF);
+    }
 }
 
 /**
@@ -96,24 +106,33 @@ static void escribirMemoriaHardware(TMV* mv, uint32_t dir_logica, int32_t valor)
  * @return int32_t Valor resuelto y extendido a 32 bits.
  */
 int32_t obtenerValorOperando(TMV* mv, uint8_t tipo, int32_t raw_val) {
-    if (tipo == 1) {
+    if (tipo == 1) { // REGISTRO
         // Enmascaramos a 5 bits para garantizar un índice de registro válido (0..31)
         uint8_t num_reg = (uint8_t)(raw_val & 0x1F);
-        return mv->reg[num_reg];
+        uint8_t sector = (raw_val >> 5) & 0x03; // Máscara para extraer los 2 bits de sector
+        
+        // Retorna el valor enmascarado y extendido en signo según el sector
+        if (sector == 0) return mv->reg[num_reg];                                             // EXT (4 bytes)
+        else if (sector == 1) return (int32_t)(int8_t)(mv->reg[num_reg] & 0xFF);              // AL (4to byte)
+        else if (sector == 2) return (int32_t)(int8_t)((mv->reg[num_reg] >> 8) & 0xFF);       // AH (3er byte)
+        else return (int32_t)(int16_t)(mv->reg[num_reg] & 0xFFFF);                            // AX (2 bytes)
     } 
-    else if (tipo == 2) {
+    else if (tipo == 2) { // INMEDIATO
         // Casteo a int16_t para forzar la extensión de signo a 32 bits
         return (int32_t)((int16_t)(raw_val & 0xFFFF));
     } 
-    else if (tipo == 3) {
+    else if (tipo == 3) { // MEMORIA
         // Formato de memoria: 8 bits de registro base + 16 bits de offset con signo
         uint8_t regBase = (uint8_t)(raw_val & 0x1F);
         int16_t offset  = (int16_t)((raw_val >> 8) & 0xFFFF);
+        uint8_t mod     = (raw_val >> 5) & 0x07; // Máscara de 3 bits para modificador
 
         // La dirección lógica resulta de sumar el offset al puntero del registro base
         uint32_t dir_logica = (uint32_t)(mv->reg[regBase] + offset);
-
-        return leerMemoriaHardware(mv, dir_logica);
+        
+        // Decodifica: 001 (b) -> 1, 010 (w) -> 2, 100 (l) -> 4
+        uint16_t cant_bytes = (mod == 1) ? 1 : (mod == 2) ? 2 : 4;
+        return leerMemoriaHardware(mv, dir_logica, cant_bytes);
     }
     return 0;
 }
@@ -127,18 +146,25 @@ int32_t obtenerValorOperando(TMV* mv, uint8_t tipo, int32_t raw_val) {
  * @param valor   Valor que se desea escribir.
  */
 void guardarResultado(TMV* mv, uint8_t tipo, int32_t raw_val, int32_t valor) {
-    if (tipo == 1) {
+    if (tipo == 1) { // REGISTRO
         uint8_t num_reg = (uint8_t)(raw_val & 0x1F);
-        mv->reg[num_reg] = valor;
+        uint8_t sector = (raw_val >> 5) & 0x03;
+        
+        if (sector == 0) mv->reg[num_reg] = valor;
+        else if (sector == 1) mv->reg[num_reg] = (mv->reg[num_reg] & 0xFFFFFF00) | (valor & 0xFF);
+        else if (sector == 2) mv->reg[num_reg] = (mv->reg[num_reg] & 0xFFFF00FF) | ((valor & 0xFF) << 8);
+        else if (sector == 3) mv->reg[num_reg] = (mv->reg[num_reg] & 0xFFFF0000) | (valor & 0xFFFF);
     } 
-    else if (tipo == 3) {
+    else if (tipo == 3) { // MEMORIA
         uint8_t regBase = (uint8_t)(raw_val & 0x1F);
         int16_t offset  = (int16_t)((raw_val >> 8) & 0xFFFF);
+        uint8_t mod     = (raw_val >> 5) & 0x07;
         uint32_t dir_logica = (uint32_t)(mv->reg[regBase] + offset);
-
-        escribirMemoriaHardware(mv, dir_logica, valor);
-    } 
-    else {
+        
+        uint16_t cant_bytes = (mod == 1) ? 1 : (mod == 2) ? 2 : 4;
+        escribirMemoriaHardware(mv, dir_logica, cant_bytes, valor);
+    }
+    else{
         // Un inmediato no puede ser operando de destino
         printf("Error: Intento de escritura en un operando no modificable.\n");
         mv->errorFlag = 1;
