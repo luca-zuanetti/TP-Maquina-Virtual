@@ -417,6 +417,63 @@ void op_stop(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     mv->reg[IP] = (int32_t)0xFFFFFFFF;
 }
 
+// 0x0B: PUSH (Apila un valor de 4 bytes)
+void op_push(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+    (void)tB; (void)vB;
+    mv->reg[SP] -= 4;
+    if (mv->reg[SP] < mv->reg[SS]) {
+        printf("Error: Stack overflow.\n");
+        mv->errorFlag = 1;
+        return;
+    }
+    int32_t valor = obtenerValorOperando(mv, tA, vA);
+    escribirMemoriaHardware(mv, (uint32_t)mv->reg[SP], 4, valor);
+}
+
+// 0x0C: POP (Desapila 4 bytes hacia un operando)
+void op_pop(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+    (void)tB; (void)vB;
+    int32_t dir_fisica = traducirDireccion(mv, (uint32_t)mv->reg[SP], 4);
+    if (dir_fisica < 0) {
+        printf("Error: Stack underflow.\n");
+        mv->errorFlag = 1;
+        return;
+    }
+    int32_t valor = leerMemoriaHardware(mv, (uint32_t)mv->reg[SP], 4);
+    if (mv->errorFlag) return; 
+    guardarResultado(mv, tA, vA, valor);
+    mv->reg[SP] += 4;
+}
+
+// 0x0D: CALL (Llamada a subrutina)
+void op_call(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+    (void)tB; (void)vB;
+    mv->reg[SP] -= 4;
+    if (mv->reg[SP] < mv->reg[SS]) {
+        printf("Error: Stack overflow en CALL.\n");
+        mv->errorFlag = 1;
+        return;
+    }
+    escribirMemoriaHardware(mv, (uint32_t)mv->reg[SP], 4, mv->reg[IP]);
+    int32_t destino_offset = obtenerValorOperando(mv, tA, vA);
+    mv->reg[IP] = (mv->reg[CS] & 0xFFFF0000) | ((uint32_t)destino_offset & 0xFFFF);
+}
+
+// 0x0E: RET (Retorno de subrutina)
+void op_ret(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+    (void)tA; (void)vA; (void)tB; (void)vB;
+    int32_t dir_fisica = traducirDireccion(mv, (uint32_t)mv->reg[SP], 4);
+    if (dir_fisica < 0) {
+        printf("Error: Stack underflow en RET.\n");
+        mv->errorFlag = 1;
+        return;
+    }
+    int32_t valor_retorno = leerMemoriaHardware(mv, (uint32_t)mv->reg[SP], 4);
+    if (mv->errorFlag) return;
+    mv->reg[IP] = valor_retorno;
+    mv->reg[SP] += 4;
+}
+
 // 0x10: MOV (Asignación: A = B)
 void op_mov(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t valB = obtenerValorOperando(mv, tB, vB);
@@ -625,6 +682,10 @@ void inicializarTablaInstrucciones(void) {
     tablaInstrucciones[JNN]  = op_jnn;
     tablaInstrucciones[JNZ]  = op_jnz;
     tablaInstrucciones[NOT]  = op_not;
+    tablaInstrucciones[PUSH] = op_push;
+    tablaInstrucciones[POP]  = op_pop;
+    tablaInstrucciones[CALL] = op_call;
+    tablaInstrucciones[RET]  = op_ret;
     tablaInstrucciones[STOP] = op_stop;
     tablaInstrucciones[MOV]  = op_mov;
     tablaInstrucciones[ADD]  = op_add;
