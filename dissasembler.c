@@ -11,9 +11,21 @@
 static void imprimirOperando(uint8_t tipo, int32_t valor) {
     if (tipo == 1) { 
         // Operando Registro (1 byte): índice de 0 a 31
-        int regCode = valor & 0x1F;
+        uint8_t regCode = valor & 0x1F;
+        uint8_t sector = (valor >> 5) & 0x03;
+        
+        // Si es un registro de propósito general (EAX a EFX), evaluamos el pseudónimo
         if (regCode >= 0 && regCode < 32) {
-            printf("%s", regStr[regCode]);
+            if (regCode >= 10 && regCode <= 15) { 
+                char letra = regStr[regCode][1]; // Extrae la letra (A, B, C, D, E, F) de "EAX", "EBX", etc.
+                
+                if (sector == 0) printf("E%cX", letra);      // Ejemplo: EAX
+                else if (sector == 1) printf("%cL", letra);  // Ejemplo: AL
+                else if (sector == 2) printf("%cH", letra);  // Ejemplo: AH
+                else printf("%cX", letra);                   // Ejemplo: AX
+            } else {
+                printf("%s", regStr[regCode]); // Imprime punteros y registros especiales normal
+            }
         }
     } 
     else if (tipo == 2) { 
@@ -22,17 +34,19 @@ static void imprimirOperando(uint8_t tipo, int32_t valor) {
     } 
     else if (tipo == 3) { 
         // Operando Memoria (3 bytes): [registro + desplazamiento]
-        int regCode    = valor & 0x1F;
+        uint8_t regCode = valor & 0x1F;
         int16_t offset = (int16_t)((valor >> 8) & 0xFFFF);
+        uint8_t mod = (valor >> 5) & 0x07;
+        
+        // Aplica el modificador de tamaño a la cadena de salida
+        if (mod == 1) printf("b");
+        else if (mod == 2) printf("w");
+        else if (mod == 4) printf("l");
         
         if (regCode >= 0 && regCode < 32) {
-            if (offset > 0) {
-                printf("[%s+%d]", regStr[regCode], offset);
-            } else if (offset < 0) {
-                printf("[%s%d]", regStr[regCode], offset); // %d ya imprime el signo negativo
-            } else {
-                printf("[%s]", regStr[regCode]);
-            }
+            if (offset > 0) printf("[%s+%d]", regStr[regCode], offset);
+            else if (offset < 0) printf("[%s%d]", regStr[regCode], offset); 
+            else printf("[%s]", regStr[regCode]);
         } else {
             printf("[%d]", offset);
         }
