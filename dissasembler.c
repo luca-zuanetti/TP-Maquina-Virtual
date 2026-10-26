@@ -75,7 +75,7 @@ void ejecutarDisassembler(TMV* mv) {
         if (opcode >= 0x10 && opcode <= 0x1F) {
             tipo_opA = (primer_byte >> 4) & 0x03;
             tipo_opB = (primer_byte >> 6) & 0x03;
-        } else if (opcode <= 0x0A) {
+        } else if (opcode <= 0x0D) {
             tipo_opA = (primer_byte >> 6) & 0x03;
             tipo_opB = 0;
         } else if (opcode == 0x0F) {

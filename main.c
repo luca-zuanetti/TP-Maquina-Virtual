@@ -443,8 +443,8 @@ void ejecutarMV(TMV* mv) {
             tipo_opA = (primer_byte >> 4) & 0x03;
             tipo_opB = (primer_byte >> 6) & 0x03;
         } 
-        else if (opcode <= 0x0A) {
-            // 1 Operando (SYS a NOT): Único operando (A) en bits 6..7
+        else if (opcode <= 0x0D) {
+            // 1 Operando (SYS a NOT, PUSH, POP y CALL): Único operando (A) en bits 6..7
             tipo_opA = (primer_byte >> 6) & 0x03;
             tipo_opB = 0;
         } 
