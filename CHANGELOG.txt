@@ -64,3 +64,16 @@ Todos los cambios notables realizados en este proyecto serán documentados en es
 - `cargarArchivo` rechaza un entry point ubicado fuera del Code Segment, en lugar de finalizar la ejecución sin informar el error.
 - Casts explícitos a `uint16_t` al extraer índices de segmento y offsets (compilación limpia también con `-Wconversion` en esas líneas).
 - README actualizado: memoria de tamaño variable (`m=M`, 1 a 64 KiB), nuevos registros SP, BP, ES, SS, KS y PS, y ubicación de los segmentos en la tabla de descriptores.
+
+## [2.0.1-dev] - 2026-10-25
+
+### Añadido
+- Precarga de la pila de la subrutina principal (`.vmx` versión 2): en el tope la dirección de retorno `-1`, luego `argc` y el puntero a `argv` (`0` y `-1` si no se usó `-p`). `SP` queda en `SS` + tamaño de la pila - 12, de modo que el `RET` final de `main` termina el proceso.
+- Validación previa a la carga: un Stack Segment menor a 12 bytes informa stack overflow y aborta antes de escribir en la memoria.
+- Mnemónicos `PUSH`, `POP`, `CALL` y `RET` en el diccionario `opStr` del desensamblador.
+
+### Corregido
+- El proyecto no compilaba desde el merge de las operaciones de pila: faltaban los códigos `PUSH` (0x0B), `POP` (0x0C), `CALL` (0x0D) y `RET` (0x0E) en el enum `OpCode` de `mv.h`.
+- La escritura Big Endian de 4 bytes del Param Segment se unificó en `escribirBigEndian32`, reutilizada por la precarga de la pila.
+- Un flag `-p` sin parámetros detrás ya no crea un Param Segment con solo el nombre del ejecutable: se comporta igual que sin `-p` (sin Param Segment, `argc` = 0 y `argv` = -1).
+- Validación de la pila unificada: cualquier Stack Segment de la versión 2 menor a 12 bytes (incluido 0) informa stack overflow; el Code Segment se valida por separado.

@@ -22,7 +22,7 @@ const char* regStr[32] = {
 // Mapeo de mnemónicos para los 32 posibles códigos de operación (Opcodes)
 const char* opStr[32] = {
     "SYS", "JMP", "JP", "JN", "JZ", "JC", "JV", "JNP", "JNN", "JNZ", "NOT",
-    "---", "---", "---", "---", "STOP", "MOV", "ADD", "SUB", "MUL", "DIV", 
+    "PUSH", "POP", "CALL", "RET", "STOP", "MOV", "ADD", "SUB", "MUL", "DIV", 
     "CMP", "AND", "OR", "XOR", "SWAP", "SHL", "SHR", "SAR", "LDL", "LDH", "RND"
 };
 
@@ -137,6 +137,17 @@ int inicializarSegmentosYRegistros(TMV* mv, const uint32_t tamSeg[CANT_SEGMENTOS
 }
 
 /**
+ * @brief Escribe un valor de 4 bytes en formato Big Endian (el byte más
+ *        significativo queda en la dirección más baja).
+ */
+static void escribirBigEndian32(uint8_t* destino, uint32_t valor) {
+    destino[0] = (uint8_t)(valor >> 24);
+    destino[1] = (uint8_t)(valor >> 16);
+    destino[2] = (uint8_t)(valor >> 8);
+    destino[3] = (uint8_t)valor;
+}
+
+/**
  * @brief Calcula el tamaño del Param Segment: los strings (nombre del .vmx y
  *        parámetros, cada uno con su '\0') seguidos del arreglo argv de punteros.
  */
@@ -169,13 +180,45 @@ static void cargarParamSegment(TMV* mv, const char* nombreArch, int cantParam, c
     uint32_t offsetStr = 0;
     for (int i = 0; i <= cantParam; i++) {
         const char* str = (i == 0) ? nombreArch : params[i - 1];
-        uint32_t puntero = (entradaPS << 16) | offsetStr;
-        inicio[offset++] = (uint8_t)(puntero >> 24);
-        inicio[offset++] = (uint8_t)(puntero >> 16);
-        inicio[offset++] = (uint8_t)(puntero >> 8);
-        inicio[offset++] = (uint8_t)puntero;
+        escribirBigEndian32(inicio + offset, (entradaPS << 16) | offsetStr);
+        offset    += 4;
         offsetStr += (uint32_t)strlen(str) + 1;
     }
+}
+
+/**
+ * @brief Precarga la pila para la subrutina principal. Desde el tope:
+ *        [SP] dirección de retorno -1, [SP+4] argc y [SP+8] puntero a argv.
+ *
+ * Sin parámetros (sin -p, o -p sin nada detrás): argc = 0 y argv = -1. Con parámetros: argc cuenta el nombre del .vmx
+ * más los parámetros (tamaño del arreglo argv) y argv apunta al arreglo,
+ * ubicado en el Param Segment después de todos los strings.
+ * La escritura es directa sobre la RAM: es el loader, no una instrucción,
+ * por lo que no pasa por LAR, MAR ni MBR.
+ * Requiere un Stack Segment de al menos PILA_INICIAL bytes (lo valida cargarArchivo).
+ */
+static void precargarPila(TMV* mv, const char* nombreArch, int cantParam, char** params) {
+    uint32_t entradaSS = ((uint32_t)mv->reg[SS] >> 16) & 0xFFFF;
+    uint32_t tamSS     = mv->seg[entradaSS].size;
+
+    int32_t argc   = 0;
+    int32_t ptrArgv = -1;
+    if (cantParam > 0) {
+        // argv comienza al final de los strings: su offset es la suma de sus largos
+        uint32_t offsetArgv = (uint32_t)strlen(nombreArch) + 1;
+        for (int i = 0; i < cantParam; i++) {
+            offsetArgv += (uint32_t)strlen(params[i]) + 1;
+        }
+        argc    = cantParam + 1;
+        ptrArgv = (int32_t)((uint32_t)mv->reg[PS] | offsetArgv);
+    }
+
+    // SP pasa de SS + tamaño (pila vacía) a SS + tamaño - 12
+    mv->reg[SP] -= PILA_INICIAL;
+    uint8_t* tope = mv->mem + mv->seg[entradaSS].base + (tamSS - PILA_INICIAL);
+    escribirBigEndian32(tope,     0xFFFFFFFFU);        // Dirección de retorno: fuera del Code Segment
+    escribirBigEndian32(tope + 4, (uint32_t)argc);
+    escribirBigEndian32(tope + 8, (uint32_t)ptrArgv);
 }
 
 /**
@@ -184,11 +227,12 @@ static void cargarParamSegment(TMV* mv, const char* nombreArch, int cantParam, c
  *
  * Soporta ambas versiones de cabecera:
  * - Versión 1 (8 bytes):  solo Code Segment; el Data Segment ocupa el resto de la RAM.
- * - Versión 2 (18 bytes): tamaños de CS, DS, ES, SS, KS y offset del entry point.
+ * - Versión 2 (18 bytes): tamaños de CS, DS, ES, SS, KS y offset del entry point;
+ *   además precarga la pila de la subrutina principal (retorno -1, argc y argv).
  *
  * @param mv         Puntero a la Máquina Virtual (con la memoria ya creada).
  * @param nombreArch Nombre o ruta del archivo binario a ejecutar.
- * @param cantParam  Cantidad de parámetros indicados con -p (-1 si no se usó -p).
+ * @param cantParam  Cantidad de parámetros indicados con -p (-1 si no se usó -p, 0 si -p no tiene parámetros).
  * @param params     Parámetros indicados con -p.
  * @return int       1 si la carga fue exitosa, 0 ante cualquier error.
  */
@@ -239,8 +283,8 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
         tamSeg[SEG_CONST] = ((uint32_t)header[14] << 8) | header[15];
         entryPoint        = (uint16_t)(((uint16_t)header[16] << 8) | header[17]);
 
-        // El Param Segment solo existe si se indicó el flag -p
-        if (cantParam >= 0) {
+        // El Param Segment solo existe si hay parámetros (un -p sin nada detrás no lo crea)
+        if (cantParam > 0) {
             tamSeg[SEG_PARAM] = calcularTamParam(nombreArch, cantParam, params);
             if (tamSeg[SEG_PARAM] > 0xFFFF) {
                 fprintf(stderr, "Error: Los parametros exceden el tamano maximo de un segmento.\n");
@@ -250,11 +294,19 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
         }
     }
 
-    // El Code Segment y el Stack Segment siempre deben existir (la versión 1 no tiene pila);
-    // sin ellos los registros CS o SS quedarían en -1 y no habría entrada válida en la tabla
-    if (tamSeg[SEG_CODE] == 0 || (version == 2 && tamSeg[SEG_STACK] == 0)) {
-        fprintf(stderr, "Error: El ejecutable debe tener Code Segment%s de tamano mayor a cero.\n",
-                (version == 2) ? " y Stack Segment" : "");
+    // El Code Segment siempre debe existir; sin él el registro CS quedaría en -1
+    // y no habría entrada válida en la tabla
+    if (tamSeg[SEG_CODE] == 0) {
+        fprintf(stderr, "Error: El ejecutable debe tener Code Segment de tamano mayor a cero.\n");
+        fclose(arch);
+        return 0;
+    }
+
+    // El Stack Segment de la versión 2 debe existir y poder alojar la precarga de la
+    // subrutina principal (retorno, argc y argv); la versión 1 no tiene pila
+    if (version == 2 && tamSeg[SEG_STACK] < PILA_INICIAL) {
+        fprintf(stderr, "Error: Stack overflow (la pila de %u bytes no alcanza para los %d bytes de la subrutina principal).\n",
+                tamSeg[SEG_STACK], PILA_INICIAL);
         fclose(arch);
         return 0;
     }
@@ -293,6 +345,11 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
 
     if (tamSeg[SEG_PARAM] > 0) {
         cargarParamSegment(mv, nombreArch, cantParam, params);
+    }
+
+    // La versión 1 no tiene pila: solo la versión 2 arranca en la subrutina principal
+    if (version == 2) {
+        precargarPila(mv, nombreArch, cantParam, params);
     }
 
     // El IP arranca en el entry point: [entrada de CS | offset del entry point]

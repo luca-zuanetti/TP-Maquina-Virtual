@@ -12,6 +12,7 @@
 #define HEADER_SIZE_V1  8       /* Tamaño en bytes de la cabecera .vmx versión 1 */
 #define HEADER_SIZE_V2  18      /* Tamaño en bytes de la cabecera .vmx versión 2 */
 #define ENTRY_INACTIVE  0xFFFF  /* Valor indicador de descriptor inactivo (-1) */
+#define PILA_INICIAL    12      /* Bytes precargados en la pila: retorno, argc y argv */
 
 /* ========================================================================= */
 /* BANDERAS DEL REGISTRO CC (Bits 31 a 28 de los 32 bits)                    */
@@ -70,6 +71,7 @@ typedef enum {
     SYS = 0x00, 
     JMP, JP, JN, JZ, JC, JV, JNP, JNN, JNZ, 
     NOT = 0x0A,
+    PUSH = 0x0B, POP, CALL, RET,
     STOP = 0x0F,
     MOV = 0x10, ADD, SUB, MUL, DIV, CMP,
     AND = 0x16, OR, XOR, SWAP,
