@@ -113,3 +113,9 @@ Todos los cambios notables realizados en este proyecto serán documentados en es
 
 ### Corregido
 - `SYS 1` descarta el resto de la línea después de leer cada valor: `scanf` dejaba el Enter en el teclado y una lectura posterior con `SYS 3` lo tomaba como una línea vacía.
+
+### Observaciones
+- Efecto del cambio en `SYS 1`: se espera un valor por línea (uno por cada prompt `[XXXX]:`). Si el usuario escribe varios valores en una misma línea (por ejemplo `25 30` cuando `SYS 1` lee dos valores), solo se toma el primero y el resto de la línea se descarta; el segundo valor se pide en una línea nueva. Antes, el `30` se tomaba como segundo valor sin volver a esperar.
+- Alternativas evaluadas y descartadas:
+  - Que `SYS 3` saltee un Enter inicial: no distingue un Enter sobrante de un string vacío ingresado a propósito, y no cubre restos de línea con texto (por ejemplo ` 30`).
+  - Que `SYS 1` marque con una variable que dejó restos en el teclado y que `SYS 3` los descarte solo en ese caso: mantiene la lectura de varios valores por línea, pero agrega un estado oculto entre dos llamadas al sistema. Queda como opción si se necesitara ese comportamiento.
