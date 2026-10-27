@@ -77,3 +77,21 @@ Todos los cambios notables realizados en este proyecto serán documentados en es
 - La escritura Big Endian de 4 bytes del Param Segment se unificó en `escribirBigEndian32`, reutilizada por la precarga de la pila.
 - Un flag `-p` sin parámetros detrás ya no crea un Param Segment con solo el nombre del ejecutable: se comporta igual que sin `-p` (sin Param Segment, `argc` = 0 y `argv` = -1).
 - Validación de la pila unificada: cualquier Stack Segment de la versión 2 menor a 12 bytes (incluido 0) informa stack overflow; el Code Segment se valida por separado.
+
+## [2.0.2-dev] - 2026-10-26
+
+### Añadido
+- Desensamblado del Const Segment (`-d`): antes del código se muestra cada cadena terminada en `\0` con su dirección física, sus bytes en hexadecimal (incluido el `\0`; si supera los 7 bytes, los primeros 6 seguidos de `..`) y la cadena entre comillas, con un punto en lugar de cada carácter no imprimible.
+- Marca `>` del entry point en el desensamblado del Code Segment; el resto de las líneas lleva un espacio en esa posición para mantener la alineación. Solo se marca si `IP` apunta al Code Segment.
+
+### Corregido
+- La columna hexadecimal del desensamblador se alinea a 7 bytes, el largo de una instrucción con dos operandos de memoria, y la barra `|` va a continuación con un solo espacio, como en el ejemplo oficial.
+- Los operandos de memoria con desplazamiento cero se muestran con signo (`b[DS+0]`), igual que en el formato oficial.
+- Una instrucción cortada al final del Code Segment se muestra con sus bytes presentes y `???`, sin leer fuera del segmento.
+- `PUSH` lee su operando antes de decrementar `SP`: `PUSH SP` apila el `SP` original y `PUSH [SP]` lee el tope previo en lugar de la celda que se está por escribir.
+- `CALL` lee su destino antes de apilar la dirección de retorno: `CALL [SP]` salta al valor del tope y no a la dirección de retorno recién apilada.
+- Operandos de memoria `[reg + offset]`: el desplazamiento se suma solo a los 16 bits bajos del registro base; si el resultado queda fuera de `[0, 0xFFFF]` se informa fallo de segmento, en lugar de alterar el índice de segmento con un acarreo o un préstamo.
+- Compilación limpia de `dissasembler.c` bajo `-Wall -Wextra`: se quitó una comparación `>= 0` siempre verdadera sobre `uint8_t`.
+- Una instrucción cuyo operando produce un fallo de segmento queda abortada: no se leen más operandos ni se escribe el resultado, y `DIV` ya no informa un falso "dividir por 0" a continuación del fallo.
+- `POP` incrementa `SP` antes de guardar el valor desapilado: `POP SP` deja en `SP` el valor extraído en lugar de ese valor + 4.
+- Precedencia de errores en el cargador: un proceso que no entra en la RAM informa "Memoria insuficiente" aunque además su Stack Segment sea menor a 12 bytes; el stack overflow de la precarga se valida después.
