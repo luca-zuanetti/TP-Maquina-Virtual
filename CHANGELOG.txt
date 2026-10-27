@@ -119,3 +119,17 @@ Todos los cambios notables realizados en este proyecto serán documentados en es
 - Alternativas evaluadas y descartadas:
   - Que `SYS 3` saltee un Enter inicial: no distingue un Enter sobrante de un string vacío ingresado a propósito, y no cubre restos de línea con texto (por ejemplo ` 30`).
   - Que `SYS 1` marque con una variable que dejó restos en el teclado y que `SYS 3` los descarte solo en ese caso: mantiene la lectura de varios valores por línea, pero agrega un estado oculto entre dos llamadas al sistema. Queda como opción si se necesitara ese comportamiento.
+
+## [2.0.5-dev] - 2026-10-27
+
+### Añadido
+- Imagen de la máquina virtual (`.vmi`): `guardarImagen` escribe la cabecera (`VMI26`, versión 1 y tamaño de la memoria en KiB), los 32 registros, la tabla de descriptores de segmentos y la memoria principal completa. Todos los valores de más de un byte se guardan en Big Endian, igual que en el resto de la máquina.
+- `cargarImagen` restaura la máquina desde un `.vmi`: crea la memoria con el tamaño de la cabecera y carga registros, tabla y memoria tal como están en el archivo.
+- Ejecución con solo un archivo `.vmi` (sin `.vmx`): se retoma la ejecución desde el estado guardado. En ese caso `m=M` y `-p` se ignoran.
+- Campo `archVmi` en `TMV`: archivo de imagen indicado en la línea de comandos (`NULL` si no se indicó), para los breakpoints.
+
+### Validaciones
+- La carga de un `.vmi` informa error si el archivo no existe, si no empieza con `VMI26` versión 1, si está incompleto o si algún segmento activo de la tabla queda fuera de la memoria.
+
+### Observaciones
+- La consigna no indica el orden de los bytes dentro del `.vmi`; se usa Big Endian. Debe verificarse con el debugger `vmg` de la cátedra.
