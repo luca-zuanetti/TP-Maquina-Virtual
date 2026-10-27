@@ -101,3 +101,15 @@ Todos los cambios notables realizados en este proyecto serán documentados en es
 ### Corregido
 - `PUSH` sigue estrictamente los pasos de la consigna: decrementa `SP` en 4, controla el stack overflow y recién después obtiene el valor del operando y lo guarda en la pila. `PUSH SP` apila el `SP` ya decrementado y `PUSH [SP+n]` se calcula con el `SP` nuevo (revierte el cambio de la versión 2.0.2-dev).
 - `POP` sigue estrictamente los pasos de la consigna: extrae los 4 bytes del tope, los asigna al operando y recién después incrementa `SP` en 4. `POP SP` deja en `SP` el valor extraído + 4 y `POP [SP+n]` se calcula con el `SP` sin incrementar (revierte el cambio de la versión 2.0.2-dev).
+
+## [2.0.4-dev] - 2026-10-27
+
+### Añadido
+- `SYS 3` (STRING READ): lee una línea del teclado y la guarda a partir de la dirección de `EDX`, terminada en `\0`. `ECX` indica la cantidad máxima de caracteres (`-1` sin límite); lo que exceda se descarta. No muestra prompt.
+- `SYS 4` (STRING WRITE): imprime a partir de la dirección de `EDX` hasta encontrar un `\0`.
+- `SYS 0` (CLEAR SCREEN): limpia la pantalla con el comando `cls` (solo funciona en Windows).
+- `SYS F` (BREAKPOINT) reservado: por ahora no realiza ninguna acción; se implementará junto con la imagen `.vmi`.
+- Cada carácter leído o escrito por `SYS 3` y `SYS 4` pasa por el bus de memoria (`LAR`, `MAR`, `MBR`) y produce un fallo de segmento si sale de su segmento.
+
+### Corregido
+- `SYS 1` descarta el resto de la línea después de leer cada valor: `scanf` dejaba el Enter en el teclado y una lectura posterior con `SYS 3` lo tomaba como una línea vacía.

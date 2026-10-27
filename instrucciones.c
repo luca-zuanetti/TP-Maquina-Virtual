@@ -247,7 +247,8 @@ static void actualizarCC(TMV* mv, int n, int z, int c, int v) {
 /* IMPLEMENTACIÓN DE LAS 26 INSTRUCCIONES                                    */
 /* ========================================================================= */
 
-// 0x00: SYS (Llamadas al Sistema: 1 = READ, 2 = WRITE)
+// 0x00: SYS (Llamadas al Sistema: 0 = CLEAR SCREEN, 1 = READ, 2 = WRITE,
+//            3 = STRING READ, 4 = STRING WRITE, F = BREAKPOINT)
 void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB; // SYS utiliza solo el primer operando
 
@@ -290,6 +291,11 @@ void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
                 // Modo Decimal por defecto
                 if (scanf("%d", &entrada) != 1) entrada = 0;
             }
+
+            // scanf deja el Enter en el teclado: se descarta el resto de la línea para
+            // que una lectura posterior (por ejemplo SYS 3) no lo tome como fin de línea
+            int resto;
+            while ((resto = getchar()) != '\n' && resto != EOF);
 
             mv->reg[MBR] = entrada;
 
@@ -364,7 +370,44 @@ void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
             }
             printf("\n");
         }
-    } 
+    }
+    else if (nro_servicio == 3) {
+        // SYS STRING READ: lee una línea y la guarda desde EDX terminada en '\0'.
+        // ECX = máximo de caracteres (-1: sin límite); lo que exceda se descarta.
+        // Sin prompt [XXXX]: (la consigna no lo muestra para strings)
+        int32_t maximo = mv->reg[ECX];
+        int32_t leidos = 0;
+        int c;
+
+        while ((c = getchar()) != EOF && c != '\n') {
+            if (c == '\r') continue;                          // fin de línea de Windows
+            if (maximo != -1 && leidos >= maximo) continue;   // excede el máximo: se descarta
+            escribirMemoriaHardware(mv, dir_logica + (uint32_t)leidos, 1, c);
+            if (mv->errorFlag) return;
+            leidos++;
+        }
+        escribirMemoriaHardware(mv, dir_logica + (uint32_t)leidos, 1, 0);
+    }
+    else if (nro_servicio == 4) {
+        // SYS STRING WRITE: imprime desde EDX hasta encontrar '\0'
+        uint32_t dir = dir_logica;
+        for (;;) {
+            uint8_t c = (uint8_t)leerMemoriaHardware(mv, dir, 1);
+            if (mv->errorFlag || c == 0) break;
+            putchar(c);
+            dir++;
+        }
+        fflush(stdout);
+    }
+    else if (nro_servicio == 0) {
+        // SYS CLEAR SCREEN: limpia la pantalla (no usa ni modifica registros).
+        // Solo funciona en Windows: ejecuta el comando "cls" de la consola
+        system("cls");
+    }
+    else if (nro_servicio == 0xF) {
+        // SYS BREAKPOINT: se implementa junto con la imagen .vmi
+    }
+    // Cualquier otro número de servicio se ignora
 }
 
 // 0x01: JMP (Salto Incondicional)
