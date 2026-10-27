@@ -302,15 +302,6 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
         return 0;
     }
 
-    // El Stack Segment de la versión 2 debe existir y poder alojar la precarga de la
-    // subrutina principal (retorno, argc y argv); la versión 1 no tiene pila
-    if (version == 2 && tamSeg[SEG_STACK] < PILA_INICIAL) {
-        fprintf(stderr, "Error: Stack overflow (la pila de %u bytes no alcanza para los %d bytes de la subrutina principal).\n",
-                tamSeg[SEG_STACK], PILA_INICIAL);
-        fclose(arch);
-        return 0;
-    }
-
     // El entry point debe apuntar dentro del Code Segment
     if (entryPoint >= tamSeg[SEG_CODE]) {
         fprintf(stderr, "Error: Entry point invalido (0x%04X) para un Code Segment de %u bytes.\n",
@@ -319,7 +310,17 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
         return 0;
     }
 
+    // Primero se valida que el proceso entre en la RAM (Memoria insuficiente)
     if (!inicializarSegmentosYRegistros(mv, tamSeg)) {
+        fclose(arch);
+        return 0;
+    }
+
+    // Recién después, el Stack Segment de la versión 2 debe existir y poder alojar la
+    // precarga de la subrutina principal (retorno, argc y argv); la versión 1 no tiene pila
+    if (version == 2 && tamSeg[SEG_STACK] < PILA_INICIAL) {
+        fprintf(stderr, "Error: Stack overflow (la pila de %u bytes no alcanza para los %d bytes de la subrutina principal).\n",
+                tamSeg[SEG_STACK], PILA_INICIAL);
         fclose(arch);
         return 0;
     }

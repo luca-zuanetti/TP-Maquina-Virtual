@@ -93,6 +93,37 @@ void escribirMemoriaHardware(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes, 
 }
 
 /**
+ * @brief Calcula la dirección lógica de un operando de memoria [reg + offset].
+ *
+ * El desplazamiento se suma solo a los 16 bits bajos (offset) del registro base,
+ * de modo que nunca altera los 16 bits altos (índice de segmento). Si el offset
+ * resultante queda fuera de [0, 0xFFFF] se produce un fallo de segmento.
+ *
+ * @param mv         Puntero a la Máquina Virtual.
+ * @param raw_val    Valor bruto del operando de memoria (offset de 16 bits | modificador | registro).
+ * @param dir_logica Salida: dirección lógica [Segmento:Offset] calculada.
+ * @return int       1 si la dirección es válida, 0 ante fallo de segmento (con errorFlag en 1).
+ */
+static int calcularDireccionMemoria(TMV* mv, int32_t raw_val, uint32_t* dir_logica) {
+    uint8_t regBase = (uint8_t)(raw_val & 0x1F);
+    int16_t offset  = (int16_t)((raw_val >> 8) & 0xFFFF);
+
+    uint32_t valorBase = (uint32_t)mv->reg[regBase];
+    uint16_t segIdx    = (uint16_t)((valorBase >> 16) & 0xFFFF);
+    uint16_t regOffset = (uint16_t)(valorBase & 0xFFFF);
+
+    int32_t offsetFinal = (int32_t)regOffset + (int32_t)offset;
+    if (offsetFinal < 0 || offsetFinal > 0xFFFF) {
+        printf("Error: Fallo de segmento (desplazamiento fuera de rango: 0x%04X %+d).\n", regOffset, offset);
+        mv->errorFlag = 1;
+        return 0;
+    }
+
+    *dir_logica = ((uint32_t)segIdx << 16) | (uint32_t)offsetFinal;
+    return 1;
+}
+
+/**
  * @brief Interpreta y obtiene el valor final de un operando de la instrucción.
  * 
  * Tipos de operando admitidos por la arquitectura:
@@ -106,6 +137,9 @@ void escribirMemoriaHardware(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes, 
  * @return int32_t Valor resuelto y extendido a 32 bits.
  */
 int32_t obtenerValorOperando(TMV* mv, uint8_t tipo, int32_t raw_val) {
+    // Si un operando anterior ya falló, la instrucción quedó abortada: no se accede a memoria
+    if (mv->errorFlag) return 0;
+
     if (tipo == 1) { // REGISTRO
         // Enmascaramos a 5 bits para garantizar un índice de registro válido (0..31)
         uint8_t num_reg = (uint8_t)(raw_val & 0x1F);
@@ -122,14 +156,13 @@ int32_t obtenerValorOperando(TMV* mv, uint8_t tipo, int32_t raw_val) {
         return (int32_t)((int16_t)(raw_val & 0xFFFF));
     } 
     else if (tipo == 3) { // MEMORIA
-        // Formato de memoria: 8 bits de registro base + 16 bits de offset con signo
-        uint8_t regBase = (uint8_t)(raw_val & 0x1F);
-        int16_t offset  = (int16_t)((raw_val >> 8) & 0xFFFF);
-        uint8_t mod     = (raw_val >> 5) & 0x07; // Máscara de 3 bits para modificador
+        // Formato de memoria: 16 bits de offset con signo + 8 bits de modificador y registro base
+        uint8_t mod = (raw_val >> 5) & 0x07; // Máscara de 3 bits para modificador
 
         // La dirección lógica resulta de sumar el offset al puntero del registro base
-        uint32_t dir_logica = (uint32_t)(mv->reg[regBase] + offset);
-        
+        uint32_t dir_logica;
+        if (!calcularDireccionMemoria(mv, raw_val, &dir_logica)) return 0;
+
         // Decodifica: 001 (b) -> 1, 010 (w) -> 2, 100 (l) -> 4
         uint16_t cant_bytes = (mod == 1) ? 1 : (mod == 2) ? 2 : 4;
         return leerMemoriaHardware(mv, dir_logica, cant_bytes);
@@ -146,6 +179,9 @@ int32_t obtenerValorOperando(TMV* mv, uint8_t tipo, int32_t raw_val) {
  * @param valor   Valor que se desea escribir.
  */
 void guardarResultado(TMV* mv, uint8_t tipo, int32_t raw_val, int32_t valor) {
+    // Una instrucción abortada (fallo al leer sus operandos) no escribe su resultado
+    if (mv->errorFlag) return;
+
     if (tipo == 1) { // REGISTRO
         uint8_t num_reg = (uint8_t)(raw_val & 0x1F);
         uint8_t sector = (raw_val >> 5) & 0x03;
@@ -156,11 +192,10 @@ void guardarResultado(TMV* mv, uint8_t tipo, int32_t raw_val, int32_t valor) {
         else if (sector == 3) mv->reg[num_reg] = (mv->reg[num_reg] & 0xFFFF0000) | (valor & 0xFFFF);
     } 
     else if (tipo == 3) { // MEMORIA
-        uint8_t regBase = (uint8_t)(raw_val & 0x1F);
-        int16_t offset  = (int16_t)((raw_val >> 8) & 0xFFFF);
-        uint8_t mod     = (raw_val >> 5) & 0x07;
-        uint32_t dir_logica = (uint32_t)(mv->reg[regBase] + offset);
-        
+        uint8_t mod = (raw_val >> 5) & 0x07;
+        uint32_t dir_logica;
+        if (!calcularDireccionMemoria(mv, raw_val, &dir_logica)) return;
+
         uint16_t cant_bytes = (mod == 1) ? 1 : (mod == 2) ? 2 : 4;
         escribirMemoriaHardware(mv, dir_logica, cant_bytes, valor);
     }
@@ -420,13 +455,16 @@ void op_stop(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 // 0x0B: PUSH (Apila un valor de 4 bytes)
 void op_push(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
+    // El operando se lee antes de mover SP: PUSH SP o PUSH [SP+n] usan el SP original
+    int32_t valor = obtenerValorOperando(mv, tA, vA);
+    if (mv->errorFlag) return;
+
     mv->reg[SP] -= 4;
     if (mv->reg[SP] < mv->reg[SS]) {
         printf("Error: Stack overflow.\n");
         mv->errorFlag = 1;
         return;
     }
-    int32_t valor = obtenerValorOperando(mv, tA, vA);
     escribirMemoriaHardware(mv, (uint32_t)mv->reg[SP], 4, valor);
 }
 
@@ -440,14 +478,19 @@ void op_pop(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
         return;
     }
     int32_t valor = leerMemoriaHardware(mv, (uint32_t)mv->reg[SP], 4);
-    if (mv->errorFlag) return; 
-    guardarResultado(mv, tA, vA, valor);
+    if (mv->errorFlag) return;
+    // SP se libera antes de guardar: POP SP deja el valor desapilado (no ese valor + 4)
     mv->reg[SP] += 4;
+    guardarResultado(mv, tA, vA, valor);
 }
 
 // 0x0D: CALL (Llamada a subrutina)
 void op_call(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
+    // Igual que en PUSH, el destino se lee antes de mover SP (CALL [SP+n] usa el SP original)
+    int32_t destino_offset = obtenerValorOperando(mv, tA, vA);
+    if (mv->errorFlag) return;
+
     mv->reg[SP] -= 4;
     if (mv->reg[SP] < mv->reg[SS]) {
         printf("Error: Stack overflow en CALL.\n");
@@ -455,7 +498,7 @@ void op_call(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
         return;
     }
     escribirMemoriaHardware(mv, (uint32_t)mv->reg[SP], 4, mv->reg[IP]);
-    int32_t destino_offset = obtenerValorOperando(mv, tA, vA);
+    if (mv->errorFlag) return;
     mv->reg[IP] = (mv->reg[CS] & 0xFFFF0000) | ((uint32_t)destino_offset & 0xFFFF);
 }
 
@@ -533,6 +576,7 @@ void op_mul(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 void op_div(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t b = obtenerValorOperando(mv, tB, vB);
+    if (mv->errorFlag) return; // Evita un falso "dividir por 0" tras un fallo de segmento
 
     if (b == 0) {
         printf("Error: No se puede dividir por 0.\n");
