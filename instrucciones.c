@@ -455,16 +455,19 @@ void op_stop(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 // 0x0B: PUSH (Apila un valor de 4 bytes)
 void op_push(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
-    // El operando se lee antes de mover SP: PUSH SP o PUSH [SP+n] usan el SP original
-    int32_t valor = obtenerValorOperando(mv, tA, vA);
-    if (mv->errorFlag) return;
-
+    // 1. Decrementar SP en 4
     mv->reg[SP] -= 4;
+    // 2. Si SP queda por debajo del comienzo del Stack Segment: stack overflow
     if (mv->reg[SP] < mv->reg[SS]) {
         printf("Error: Stack overflow.\n");
         mv->errorFlag = 1;
         return;
     }
+    // 3 y 4. Obtener el valor del operando, ya extendido a 4 bytes
+    //        (PUSH SP o PUSH [SP+n] usan el SP ya decrementado)
+    int32_t valor = obtenerValorOperando(mv, tA, vA);
+    if (mv->errorFlag) return;
+    // 5. Guardarlo en la pila en big endian: el byte más significativo queda en el tope
     escribirMemoriaHardware(mv, (uint32_t)mv->reg[SP], 4, valor);
 }
 
@@ -477,11 +480,15 @@ void op_pop(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
         mv->errorFlag = 1;
         return;
     }
+    // 1 a 3. Extraer los 4 bytes del tope (el byte del tope es el más significativo)
     int32_t valor = leerMemoriaHardware(mv, (uint32_t)mv->reg[SP], 4);
     if (mv->errorFlag) return;
-    // SP se libera antes de guardar: POP SP deja el valor desapilado (no ese valor + 4)
-    mv->reg[SP] += 4;
+    // 4. Asignar al operando (si es menor a 4 bytes se truncan los más significativos)
+    //    POP [SP+n] calcula la dirección con el SP todavía sin incrementar
     guardarResultado(mv, tA, vA, valor);
+    if (mv->errorFlag) return;
+    // 5. Incrementar SP en 4
+    mv->reg[SP] += 4;
 }
 
 // 0x0D: CALL (Llamada a subrutina)

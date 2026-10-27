@@ -95,3 +95,9 @@ Todos los cambios notables realizados en este proyecto serán documentados en es
 - Una instrucción cuyo operando produce un fallo de segmento queda abortada: no se leen más operandos ni se escribe el resultado, y `DIV` ya no informa un falso "dividir por 0" a continuación del fallo.
 - `POP` incrementa `SP` antes de guardar el valor desapilado: `POP SP` deja en `SP` el valor extraído en lugar de ese valor + 4.
 - Precedencia de errores en el cargador: un proceso que no entra en la RAM informa "Memoria insuficiente" aunque además su Stack Segment sea menor a 12 bytes; el stack overflow de la precarga se valida después.
+
+## [2.0.3-dev] - 2026-10-27
+
+### Corregido
+- `PUSH` sigue estrictamente los pasos de la consigna: decrementa `SP` en 4, controla el stack overflow y recién después obtiene el valor del operando y lo guarda en la pila. `PUSH SP` apila el `SP` ya decrementado y `PUSH [SP+n]` se calcula con el `SP` nuevo (revierte el cambio de la versión 2.0.2-dev).
+- `POP` sigue estrictamente los pasos de la consigna: extrae los 4 bytes del tope, los asigna al operando y recién después incrementa `SP` en 4. `POP SP` deja en `SP` el valor extraído + 4 y `POP [SP+n]` se calcula con el `SP` sin incrementar (revierte el cambio de la versión 2.0.2-dev).
