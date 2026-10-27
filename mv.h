@@ -99,6 +99,8 @@ typedef struct {
     TableSeg  seg[SEG_AMOUNT]; /* Tabla de descriptores de segmentos */
     int       errorFlag;       /* Bandera de control de errores (0 = OK, 1 = Error) */
     const char* archVmi;       /* Archivo de imagen para los breakpoints (NULL si no se indicó) */
+    int       bpPendiente;     /* 1 si SYS F pidió un breakpoint al terminar la instrucción */
+    int       pasoAPaso;       /* 1 si se está ejecutando de a una instrucción (Enter) */
 } TMV;
 
 /* ========================================================================= */

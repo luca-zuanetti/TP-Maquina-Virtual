@@ -132,4 +132,17 @@ Todos los cambios notables realizados en este proyecto serán documentados en es
 - La carga de un `.vmi` informa error si el archivo no existe, si no empieza con `VMI26` versión 1, si está incompleto o si algún segmento activo de la tabla queda fuera de la memoria.
 
 ### Observaciones
-- La consigna no indica el orden de los bytes dentro del `.vmi`; se usa Big Endian. Debe verificarse con el debugger `vmg` de la cátedra.
+- La consigna no indica el orden de los bytes dentro del `.vmi`; se usa Big Endian. Verificado con el debugger `vmg` de la cátedra: muestra correctamente registros, tabla de segmentos y memoria.
+
+## [2.0.6-dev] - 2026-10-27
+
+### Añadido
+- `SYS F` (BREAKPOINT): si se indicó un archivo `.vmi`, al terminar la instrucción la máquina guarda la imagen en ese archivo y espera la acción del usuario; sin `.vmi` se ignora.
+  - `g`: continúa la ejecución hasta el próximo breakpoint o hasta el final.
+  - `q`: aborta la ejecución sin error; el `.vmi` queda guardado para retomarla.
+  - Enter: ejecuta la siguiente instrucción y vuelve a pausar (paso a paso), sin importar qué haga la instrucción.
+- Mensaje mientras la máquina está pausada: `[Breakpoint] g: continuar | q: salir | Enter: siguiente instruccion >`. Cualquier otra tecla vuelve a preguntar; si la entrada se termina (EOF) se continúa como con `g`.
+- Campos `bpPendiente` y `pasoAPaso` en `TMV`: `SYS F` solo pide el breakpoint y la pausa se realiza en un único lugar del ciclo de ejecución, después de cada instrucción.
+
+### Observaciones
+- Como `IP` se actualiza antes de ejecutar, la imagen guardada en el breakpoint ya apunta a la instrucción siguiente al `SYS F`: al retomar desde el `.vmi` no se repite el breakpoint.

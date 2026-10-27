@@ -405,7 +405,8 @@ void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
         system("cls");
     }
     else if (nro_servicio == 0xF) {
-        // SYS BREAKPOINT: se implementa junto con la imagen .vmi
+        // SYS BREAKPOINT: solo si se indicó un .vmi; la pausa la realiza el ciclo de ejecución
+        if (mv->archVmi != NULL) mv->bpPendiente = 1;
     }
     // Cualquier otro número de servicio se ignora
 }

@@ -537,6 +537,44 @@ int32_t traducirDireccion(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes_acce
 /* ========================================================================= */
 
 /**
+ * @brief Breakpoint: guarda la imagen en el .vmi y espera la acción del usuario.
+ * - g:     continúa hasta el próximo breakpoint o el final.
+ * - q:     aborta la ejecución (el .vmi queda intacto para retomarla).
+ * - Enter: ejecuta la siguiente instrucción y vuelve a pausar (paso a paso).
+ */
+static void realizarBreakpoint(TMV* mv) {
+    if (!guardarImagen(mv, mv->archVmi)) {
+        mv->errorFlag = 1;
+        return;
+    }
+
+    for (;;) {
+        printf("[Breakpoint] g: continuar | q: salir | Enter: siguiente instruccion > ");
+        fflush(stdout);
+
+        int c = getchar();
+        if (c != '\n' && c != EOF) {
+            int resto;
+            while ((resto = getchar()) != '\n' && resto != EOF);   // descarta el resto de la línea
+        }
+
+        if (c == '\n') {                        // Enter: paso a paso
+            mv->pasoAPaso = 1;
+            return;
+        }
+        if (c == 'g' || c == 'G' || c == EOF) { // go (o fin de la entrada): sigue sin pausar
+            mv->pasoAPaso = 0;
+            return;
+        }
+        if (c == 'q' || c == 'Q') {             // quit: termina como un STOP; la imagen ya quedó guardada
+            mv->reg[IP] = -1;
+            return;
+        }
+        // Cualquier otra tecla: se vuelve a preguntar
+    }
+}
+
+/**
  * @brief Bucle principal de ejecución del procesador virtual.
  */
 void ejecutarMV(TMV* mv) {
@@ -640,6 +678,12 @@ void ejecutarMV(TMV* mv) {
         }
 
         tablaInstrucciones[opcode](mv, tipo_opA, valorA, tipo_opB, valorB);
+
+        // Breakpoint pedido por SYS F o modo paso a paso: se pausa después de la instrucción
+        if (mv->errorFlag == 0 && (mv->bpPendiente || mv->pasoAPaso)) {
+            mv->bpPendiente = 0;
+            realizarBreakpoint(mv);
+        }
     }
 }
 
