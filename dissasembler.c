@@ -3,53 +3,48 @@
 #include "mv.h"
 
 /**
- * @brief Imprime la representación en texto de un operando según su tipo.
- * 
+ * @brief Arma en un búfer la representación en texto de un operando según su
+ *        tipo (se arma como texto para poder alinearlo en columnas).
+ *
+ * @param buf   Búfer de salida.
+ * @param tam   Tamaño del búfer.
  * @param tipo  Tipo de operando (1: Registro, 2: Inmediato, 3: Memoria).
  * @param valor Valor bruto leído de los bytes de la instrucción.
  */
-static void imprimirOperando(uint8_t tipo, int32_t valor) {
-    if (tipo == 1) { 
+static void formatearOperando(char* buf, size_t tam, uint8_t tipo, int32_t valor) {
+    buf[0] = '\0';
+    if (tipo == 1) {
         // Operando Registro (1 byte): índice de 0 a 31
         uint8_t regCode = valor & 0x1F;
         uint8_t sector = (valor >> 5) & 0x03;
-        
+
         // Si es un registro de propósito general (EAX a EFX), evaluamos el pseudónimo
-        if (regCode < 32) {
-            if (regCode >= 10 && regCode <= 15) { 
-                char letra = regStr[regCode][1]; // Extrae la letra (A, B, C, D, E, F) de "EAX", "EBX", etc.
-                
-                if (sector == 0) printf("E%cX", letra);      // Ejemplo: EAX
-                else if (sector == 1) printf("%cL", letra);  // Ejemplo: AL
-                else if (sector == 2) printf("%cH", letra);  // Ejemplo: AH
-                else printf("%cX", letra);                   // Ejemplo: AX
-            } else {
-                printf("%s", regStr[regCode]); // Imprime punteros y registros especiales normal
-            }
+        if (regCode >= 10 && regCode <= 15) {
+            char letra = regStr[regCode][1]; // Extrae la letra (A, B, C, D, E, F) de "EAX", "EBX", etc.
+
+            if (sector == 0) snprintf(buf, tam, "E%cX", letra);      // Ejemplo: EAX
+            else if (sector == 1) snprintf(buf, tam, "%cL", letra);  // Ejemplo: AL
+            else if (sector == 2) snprintf(buf, tam, "%cH", letra);  // Ejemplo: AH
+            else snprintf(buf, tam, "%cX", letra);                   // Ejemplo: AX
+        } else {
+            snprintf(buf, tam, "%s", regStr[regCode]); // Punteros y registros especiales
         }
-    } 
-    else if (tipo == 2) { 
+    }
+    else if (tipo == 2) {
         // Operando Inmediato (2 bytes): constante entera con signo
-        printf("%d", (int16_t)valor);
-    } 
-    else if (tipo == 3) { 
+        snprintf(buf, tam, "%d", (int16_t)valor);
+    }
+    else if (tipo == 3) {
         // Operando Memoria (3 bytes): [registro + desplazamiento]
         uint8_t regCode = valor & 0x1F;
         int16_t offset = (int16_t)((valor >> 8) & 0xFFFF);
         uint8_t mod = (valor >> 5) & 0x07;
-        
-        // Aplica el modificador de tamaño a la cadena de salida
-        if (mod == 1) printf("b");
-        else if (mod == 2) printf("w");
-        else if (mod == 4) printf("l");
-        
-        if (regCode < 32) {
-            // Formato oficial: el desplazamiento siempre lleva signo, incluso el cero ([DS+0])
-            if (offset < 0) printf("[%s%d]", regStr[regCode], offset);
-            else printf("[%s+%d]", regStr[regCode], offset);
-        } else {
-            printf("[%d]", offset);
-        }
+
+        // Modificador de tamaño como prefijo
+        const char* prefijo = (mod == 1) ? "b" : (mod == 2) ? "w" : (mod == 4) ? "l" : "";
+
+        // Formato oficial: el desplazamiento siempre lleva signo, incluso el cero ([DS+0])
+        snprintf(buf, tam, "%s[%s%s%d]", prefijo, regStr[regCode], (offset < 0) ? "" : "+", offset);
     }
 }
 
@@ -70,6 +65,8 @@ static void imprimirConstantes(TMV* mv) {
 
     uint16_t segCons = (uint16_t)(((uint32_t)mv->reg[KS] >> 16) & 0xFFFF);
     if (segCons >= SEG_AMOUNT) return;
+    // KS de una imagen podría apuntar a una entrada inactiva: no hay nada que mostrar
+    if (mv->seg[segCons].base == ENTRY_INACTIVE && mv->seg[segCons].size == ENTRY_INACTIVE) return;
 
     uint32_t baseCons = mv->seg[segCons].base;
     uint32_t tamCons  = mv->seg[segCons].size;
@@ -118,7 +115,7 @@ static void imprimirConstantes(TMV* mv) {
 /**
  * @brief Muestra las constantes del Const Segment y luego recorre el segmento
  *        de código imprimiendo cada instrucción desensamblada.
- * Formato: >[XXXX] XX XX XX XX | MNEM OP_A, OP_B   ('>' marca el entry point)
+ * Formato: >[XXXX] XX XX XX XX | MNEM       OP_A,       OP_B   ('>' marca el entry point)
  */
 void ejecutarDisassembler(TMV* mv) {
     imprimirConstantes(mv);
@@ -202,19 +199,21 @@ void ejecutarDisassembler(TMV* mv) {
         }
         printf("| ");
 
-        // 6. Mnemónico de la instrucción ("???" si está cortada)
+        // 6. Mnemónico de la instrucción ("???" si está cortada), alineado a derecha
+        //    como en la máquina virtual de referencia de la cátedra (vmg)
         const char* mnem = (!incompleta && opcode < 32 && opStr[opcode] != NULL) ? opStr[opcode] : "???";
-        printf("%-5s ", mnem);
-        
-        // 7. Operandos en orden convencional (OP_A, OP_B)
-        if (tipo_opA > 0) {
-            imprimirOperando(tipo_opA, valorA);
+        printf("%4s", mnem);
+
+        // 7. Operandos en orden convencional (OP_A, OP_B), alineados a derecha en 10 columnas
+        char textoA[24], textoB[24];
+        formatearOperando(textoA, sizeof(textoA), tipo_opA, valorA);
+        formatearOperando(textoB, sizeof(textoB), tipo_opB, valorB);
+        if (tipo_opA > 0 && tipo_opB > 0) {
+            printf(" %10s, %10s", textoA, textoB);
+        } else if (tipo_opA > 0) {
+            printf(" %10s", textoA);
         }
-        if (tipo_opB > 0) {
-            if (tipo_opA > 0) printf(", ");
-            imprimirOperando(tipo_opB, valorB);
-        }
-        
+
         printf("\n");
         offset_actual += offset_lectura;
     }

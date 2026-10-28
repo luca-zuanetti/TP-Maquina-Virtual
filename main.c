@@ -487,6 +487,15 @@ int cargarImagen(TMV* mv, const char* nombreVmi) {
             return 0;
         }
     }
+
+    // CS debe apuntar a una entrada activa: el ciclo de ejecución y el desensamblador
+    // indexan la tabla con él (una imagen dañada no puede leer fuera de la tabla)
+    uint32_t entradaCS = ((uint32_t)mv->reg[CS] >> 16) & 0xFFFF;
+    if (entradaCS >= SEG_AMOUNT ||
+        (mv->seg[entradaCS].base == ENTRY_INACTIVE && mv->seg[entradaCS].size == ENTRY_INACTIVE)) {
+        fprintf(stderr, "Error: La imagen tiene un registro CS invalido (0x%08X).\n", (uint32_t)mv->reg[CS]);
+        return 0;
+    }
     mv->errorFlag = 0;
     return 1;
 }
@@ -643,14 +652,15 @@ void ejecutarMV(TMV* mv) {
         int32_t valorB = 0;
         int32_t valorA = 0;
 
-        // Lectura del Operando B (en memoria máquina viene primero por orden inverso)
+        // Lectura del Operando B (en memoria máquina viene primero por orden inverso).
+        // OP1 y OP2 guardan el operando tal cual está codificado (sin extender el signo)
         if (tipo_opB > 0) {
             for (int i = 0; i < tipo_opB; i++) {
                 valorB = (valorB << 8) | mv->mem[dir_fisica_ip + offset_lectura];
                 offset_lectura++;
             }
+            mv->reg[OP2] |= valorB;
             if (tipo_opB == 2) valorB = (int16_t)valorB; // Extensión si es inmediato
-            mv->reg[OP2] |= (valorB & 0x00FFFFFF);
         }
 
         // Lectura del Operando A
@@ -659,8 +669,8 @@ void ejecutarMV(TMV* mv) {
                 valorA = (valorA << 8) | mv->mem[dir_fisica_ip + offset_lectura];
                 offset_lectura++;
             }
+            mv->reg[OP1] |= valorA;
             if (tipo_opA == 2) valorA = (int16_t)valorA; // Extensión si es inmediato
-            mv->reg[OP1] |= (valorA & 0x00FFFFFF);
         }
 
         // ---------------------------------------------------------------------
@@ -671,7 +681,10 @@ void ejecutarMV(TMV* mv) {
         // ---------------------------------------------------------------------
         // 4. EXECUTE: Despacho a través de la tabla de punteros a función
         // ---------------------------------------------------------------------
-        if (opcode >= 32 || tablaInstrucciones[opcode] == NULL) {
+        // En MV2 los 32 códigos de operación existen: una instrucción es inválida si
+        // le falta un operando (por ejemplo un PUSH o un JMP con tipo de operando 00)
+        int faltaOperando = (opcode <= 0x0D && tipo_opA == 0) || (opcode >= 0x10 && tipo_opB == 0);
+        if (opcode >= 32 || tablaInstrucciones[opcode] == NULL || faltaOperando) {
             printf("Error: Instruccion invalida (Opcode: 0x%02X)\n", opcode);
             mv->errorFlag = 1;
             break;
