@@ -359,6 +359,148 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
 }
 
 /* ========================================================================= */
+/* IMAGEN DE LA MÁQUINA VIRTUAL (.vmi)                                       */
+/* ========================================================================= */
+
+/**
+ * @brief Lee un valor de 4 bytes en formato Big Endian (operación inversa
+ *        de escribirBigEndian32).
+ */
+static uint32_t leerBigEndian32(const uint8_t* origen) {
+    return ((uint32_t)origen[0] << 24) | ((uint32_t)origen[1] << 16) |
+           ((uint32_t)origen[2] << 8)  |  (uint32_t)origen[3];
+}
+
+/**
+ * @brief Guarda el estado completo de la máquina en un archivo de imagen (.vmi):
+ *        cabecera, 32 registros, tabla de segmentos y memoria principal.
+ *        Todos los valores de más de un byte se guardan en Big Endian.
+ *
+ * @param mv        Puntero a la Máquina Virtual.
+ * @param nombreVmi Nombre o ruta del archivo de imagen (se sobrescribe si existe).
+ * @return int      1 si se pudo escribir, 0 ante error.
+ */
+int guardarImagen(TMV* mv, const char* nombreVmi) {
+    FILE* arch = fopen(nombreVmi, "wb");
+    if (!arch) {
+        fprintf(stderr, "Error: No se pudo crear el archivo de imagen '%s'.\n", nombreVmi);
+        return 0;
+    }
+
+    // 1. Cabecera: identificador, versión y tamaño de la memoria en KiB
+    uint8_t header[HEADER_SIZE_VMI];
+    uint32_t tamKiB = mv->memSize / 1024U;
+    memcpy(header, "VMI26", 5);
+    header[5] = VERSION_VMI;
+    header[6] = (uint8_t)(tamKiB >> 8);
+    header[7] = (uint8_t)tamKiB;
+
+    // 2. Registros: 32 x 4 bytes
+    uint8_t regs[32 * 4];
+    for (int i = 0; i < 32; i++) {
+        escribirBigEndian32(regs + 4 * i, (uint32_t)mv->reg[i]);
+    }
+
+    // 3. Tabla de descriptores: 8 x (base 2 bytes, tamaño 2 bytes)
+    uint8_t tabla[SEG_AMOUNT * 4];
+    for (int i = 0; i < SEG_AMOUNT; i++) {
+        tabla[4 * i]     = (uint8_t)(mv->seg[i].base >> 8);
+        tabla[4 * i + 1] = (uint8_t)mv->seg[i].base;
+        tabla[4 * i + 2] = (uint8_t)(mv->seg[i].size >> 8);
+        tabla[4 * i + 3] = (uint8_t)mv->seg[i].size;
+    }
+
+    // 4. Escritura de las secciones y, al final, la memoria completa
+    int ok = fwrite(header, 1, sizeof(header), arch) == sizeof(header) &&
+             fwrite(regs,   1, sizeof(regs),   arch) == sizeof(regs)   &&
+             fwrite(tabla,  1, sizeof(tabla),  arch) == sizeof(tabla)  &&
+             fwrite(mv->mem, 1, mv->memSize, arch) == mv->memSize;
+    if (fclose(arch) != 0) ok = 0;
+
+    if (!ok) {
+        fprintf(stderr, "Error: No se pudo escribir el archivo de imagen '%s'.\n", nombreVmi);
+    }
+    return ok;
+}
+
+/**
+ * @brief Carga el estado de la máquina desde un archivo de imagen (.vmi):
+ *        crea la memoria con el tamaño de la cabecera y restaura registros,
+ *        tabla de segmentos y memoria tal como están en el archivo.
+ *
+ * @param mv        Puntero a la Máquina Virtual (sin memoria creada).
+ * @param nombreVmi Nombre o ruta del archivo de imagen.
+ * @return int      1 si la carga fue exitosa, 0 ante cualquier error.
+ */
+int cargarImagen(TMV* mv, const char* nombreVmi) {
+    FILE* arch = fopen(nombreVmi, "rb");
+    if (!arch) {
+        fprintf(stderr, "Error: No se pudo abrir el archivo de imagen '%s'.\n", nombreVmi);
+        return 0;
+    }
+
+    // 1. Cabecera: identificador "VMI26" y versión 1
+    uint8_t header[HEADER_SIZE_VMI];
+    uint8_t regs[32 * 4];
+    uint8_t tabla[SEG_AMOUNT * 4];
+    if (fread(header, 1, sizeof(header), arch) != sizeof(header) ||
+        memcmp(header, "VMI26", 5) != 0 || header[5] != VERSION_VMI) {
+        fprintf(stderr, "Error: '%s' no es una imagen valida (se esperaba 'VMI26' version %d).\n",
+                nombreVmi, VERSION_VMI);
+        fclose(arch);
+        return 0;
+    }
+
+    // 2. Registros y tabla de segmentos
+    if (fread(regs, 1, sizeof(regs), arch) != sizeof(regs) ||
+        fread(tabla, 1, sizeof(tabla), arch) != sizeof(tabla)) {
+        fprintf(stderr, "Error: Archivo de imagen incompleto.\n");
+        fclose(arch);
+        return 0;
+    }
+
+    // 3. Memoria principal con el tamaño indicado en la cabecera (crearMemoria lo valida)
+    uint32_t tamKiB = ((uint32_t)header[6] << 8) | header[7];
+    if (!crearMemoria(mv, tamKiB)) {
+        fclose(arch);
+        return 0;
+    }
+    if (fread(mv->mem, 1, mv->memSize, arch) != mv->memSize) {
+        fprintf(stderr, "Error: Archivo de imagen incompleto (memoria principal).\n");
+        fclose(arch);
+        return 0;
+    }
+    fclose(arch);
+
+    // 4. Restauración de registros y tabla
+    for (int i = 0; i < 32; i++) {
+        mv->reg[i] = (int32_t)leerBigEndian32(regs + 4 * i);
+    }
+    for (int i = 0; i < SEG_AMOUNT; i++) {
+        mv->seg[i].base = (uint16_t)((tabla[4 * i]     << 8) | tabla[4 * i + 1]);
+        mv->seg[i].size = (uint16_t)((tabla[4 * i + 2] << 8) | tabla[4 * i + 3]);
+
+        // Cada segmento activo debe estar dentro de la memoria: si no, la imagen está dañada
+        int inactiva = mv->seg[i].base == ENTRY_INACTIVE && mv->seg[i].size == ENTRY_INACTIVE;
+        if (!inactiva && (uint32_t)mv->seg[i].base + mv->seg[i].size > mv->memSize) {
+            fprintf(stderr, "Error: La imagen tiene un segmento fuera de la memoria (entrada %d).\n", i);
+            return 0;
+        }
+    }
+
+    // CS debe apuntar a una entrada activa: el ciclo de ejecución y el desensamblador
+    // indexan la tabla con él (una imagen dañada no puede leer fuera de la tabla)
+    uint32_t entradaCS = ((uint32_t)mv->reg[CS] >> 16) & 0xFFFF;
+    if (entradaCS >= SEG_AMOUNT ||
+        (mv->seg[entradaCS].base == ENTRY_INACTIVE && mv->seg[entradaCS].size == ENTRY_INACTIVE)) {
+        fprintf(stderr, "Error: La imagen tiene un registro CS invalido (0x%08X).\n", (uint32_t)mv->reg[CS]);
+        return 0;
+    }
+    mv->errorFlag = 0;
+    return 1;
+}
+
+/* ========================================================================= */
 /* UNIDAD DE MANEJO DE MEMORIA (MMU)                                         */
 /* ========================================================================= */
 
@@ -402,6 +544,44 @@ int32_t traducirDireccion(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes_acce
 /* ========================================================================= */
 /* CICLO DE EJECUCIÓN (FETCH - DECODE - EXECUTE)                             */
 /* ========================================================================= */
+
+/**
+ * @brief Breakpoint: guarda la imagen en el .vmi y espera la acción del usuario.
+ * - g:     continúa hasta el próximo breakpoint o el final.
+ * - q:     aborta la ejecución (el .vmi queda intacto para retomarla).
+ * - Enter: ejecuta la siguiente instrucción y vuelve a pausar (paso a paso).
+ */
+static void realizarBreakpoint(TMV* mv) {
+    if (!guardarImagen(mv, mv->archVmi)) {
+        mv->errorFlag = 1;
+        return;
+    }
+
+    for (;;) {
+        printf("[Breakpoint] g: continuar | q: salir | Enter: siguiente instruccion > ");
+        fflush(stdout);
+
+        int c = getchar();
+        if (c != '\n' && c != EOF) {
+            int resto;
+            while ((resto = getchar()) != '\n' && resto != EOF);   // descarta el resto de la línea
+        }
+
+        if (c == '\n') {                        // Enter: paso a paso
+            mv->pasoAPaso = 1;
+            return;
+        }
+        if (c == 'g' || c == 'G' || c == EOF) { // go (o fin de la entrada): sigue sin pausar
+            mv->pasoAPaso = 0;
+            return;
+        }
+        if (c == 'q' || c == 'Q') {             // quit: termina como un STOP; la imagen ya quedó guardada
+            mv->reg[IP] = -1;
+            return;
+        }
+        // Cualquier otra tecla: se vuelve a preguntar
+    }
+}
 
 /**
  * @brief Bucle principal de ejecución del procesador virtual.
@@ -472,14 +652,15 @@ void ejecutarMV(TMV* mv) {
         int32_t valorB = 0;
         int32_t valorA = 0;
 
-        // Lectura del Operando B (en memoria máquina viene primero por orden inverso)
+        // Lectura del Operando B (en memoria máquina viene primero por orden inverso).
+        // OP1 y OP2 guardan el operando tal cual está codificado (sin extender el signo)
         if (tipo_opB > 0) {
             for (int i = 0; i < tipo_opB; i++) {
                 valorB = (valorB << 8) | mv->mem[dir_fisica_ip + offset_lectura];
                 offset_lectura++;
             }
+            mv->reg[OP2] |= valorB;
             if (tipo_opB == 2) valorB = (int16_t)valorB; // Extensión si es inmediato
-            mv->reg[OP2] |= (valorB & 0x00FFFFFF);
         }
 
         // Lectura del Operando A
@@ -488,8 +669,8 @@ void ejecutarMV(TMV* mv) {
                 valorA = (valorA << 8) | mv->mem[dir_fisica_ip + offset_lectura];
                 offset_lectura++;
             }
+            mv->reg[OP1] |= valorA;
             if (tipo_opA == 2) valorA = (int16_t)valorA; // Extensión si es inmediato
-            mv->reg[OP1] |= (valorA & 0x00FFFFFF);
         }
 
         // ---------------------------------------------------------------------
@@ -500,13 +681,22 @@ void ejecutarMV(TMV* mv) {
         // ---------------------------------------------------------------------
         // 4. EXECUTE: Despacho a través de la tabla de punteros a función
         // ---------------------------------------------------------------------
-        if (opcode >= 32 || tablaInstrucciones[opcode] == NULL) {
+        // En MV2 los 32 códigos de operación existen: una instrucción es inválida si
+        // le falta un operando (por ejemplo un PUSH o un JMP con tipo de operando 00)
+        int faltaOperando = (opcode <= 0x0D && tipo_opA == 0) || (opcode >= 0x10 && tipo_opB == 0);
+        if (opcode >= 32 || tablaInstrucciones[opcode] == NULL || faltaOperando) {
             printf("Error: Instruccion invalida (Opcode: 0x%02X)\n", opcode);
             mv->errorFlag = 1;
             break;
         }
 
         tablaInstrucciones[opcode](mv, tipo_opA, valorA, tipo_opB, valorB);
+
+        // Breakpoint pedido por SYS F o modo paso a paso: se pausa después de la instrucción
+        if (mv->errorFlag == 0 && (mv->bpPendiente || mv->pasoAPaso)) {
+            mv->bpPendiente = 0;
+            realizarBreakpoint(mv);
+        }
     }
 }
 
@@ -572,26 +762,28 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // TODO: reanudar la ejecución desde una imagen cuando solo se recibe el .vmi
-    if (!archVmx) {
-        fprintf(stderr, "Error: La carga de imagenes .vmi todavia no esta implementada.\n");
-        return 1;
-    }
-
     // Inicialización del generador de números aleatorios para la instrucción RND
     srand((unsigned int)time(NULL));
 
-    TMV mv = {0};   // mv.mem nace en NULL: liberarMemoria es seguro en cualquier salida
+    TMV mv = {0};          // mv.mem nace en NULL: liberarMemoria es seguro en cualquier salida
+    mv.archVmi = archVmi;  // NULL si no se indicó: los breakpoints se ignoran
 
-    // Creación de la memoria principal de tamaño variable
-    if (!crearMemoria(&mv, memKiB)) {
-        return 1;
-    }
-
-    // Carga del programa en la memoria de la máquina virtual
-    if (!cargarArchivo(&mv, archVmx, cantParam, params)) {
-        liberarMemoria(&mv);
-        return 1;
+    if (archVmx) {
+        // Programa nuevo: memoria de m=M KiB y carga del .vmx (el .vmi es solo para breakpoints)
+        if (!crearMemoria(&mv, memKiB)) {
+            return 1;
+        }
+        if (!cargarArchivo(&mv, archVmx, cantParam, params)) {
+            liberarMemoria(&mv);
+            return 1;
+        }
+    } else {
+        // Solo .vmi: se retoma la ejecución; memoria, tabla y registros salen de la imagen
+        // (el tamaño m=M y los parámetros -p se ignoran)
+        if (!cargarImagen(&mv, archVmi)) {
+            liberarMemoria(&mv);
+            return 1;
+        }
     }
 
     // Inicialización de la tabla de despacho de operaciones

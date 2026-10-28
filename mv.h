@@ -13,6 +13,8 @@
 #define HEADER_SIZE_V2  18      /* Tamaño en bytes de la cabecera .vmx versión 2 */
 #define ENTRY_INACTIVE  0xFFFF  /* Valor indicador de descriptor inactivo (-1) */
 #define PILA_INICIAL    12      /* Bytes precargados en la pila: retorno, argc y argv */
+#define HEADER_SIZE_VMI 8       /* Tamaño en bytes de la cabecera .vmi */
+#define VERSION_VMI     1       /* Versión del formato de imagen */
 
 /* ========================================================================= */
 /* BANDERAS DEL REGISTRO CC (Bits 31 a 28 de los 32 bits)                    */
@@ -96,6 +98,9 @@ typedef struct {
     int32_t   reg[32];         /* Banco de 32 registros de 32 bits */
     TableSeg  seg[SEG_AMOUNT]; /* Tabla de descriptores de segmentos */
     int       errorFlag;       /* Bandera de control de errores (0 = OK, 1 = Error) */
+    const char* archVmi;       /* Archivo de imagen para los breakpoints (NULL si no se indicó) */
+    int       bpPendiente;     /* 1 si SYS F pidió un breakpoint al terminar la instrucción */
+    int       pasoAPaso;       /* 1 si se está ejecutando de a una instrucción (Enter) */
 } TMV;
 
 /* ========================================================================= */
@@ -124,6 +129,8 @@ int crearMemoria(TMV* mv, uint32_t tamKiB);
 void liberarMemoria(TMV* mv);
 int inicializarSegmentosYRegistros(TMV* mv, const uint32_t tamSeg[CANT_SEGMENTOS]);
 int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params);
+int guardarImagen(TMV* mv, const char* nombreVmi);
+int cargarImagen(TMV* mv, const char* nombreVmi);
 int32_t traducirDireccion(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes_acceso);
 void ejecutarMV(TMV* mv);
 void ejecutarDisassembler(TMV* mv);

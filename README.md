@@ -1,4 +1,4 @@
-# 🖥️ Máquina Virtual - Parte I (Arquitectura 2026)
+# 🖥️ Máquina Virtual - Parte II (Arquitectura 2026)
 Trabajo Práctico para la asignatura **Fundamentos de la Arquitectura de Computadoras**  
 Facultad de Ingeniería - Universidad Nacional de Mar del Plata (UNMDP)
 
@@ -79,9 +79,9 @@ Toda dirección lógica se estructura en 32 bits: `[16 bits Segmento | 16 bits D
 
 ## 5. Estructura del Código Fuente
 - `mv.h`: Contrato global de arquitectura, estructuras `TMV` y `TableSeg`, definiciones de flags y prototipos.
-- `instrucciones.c`: Implementación de las 26 instrucciones, resolución de operandos (`[reg+offset]`), actualización del bus (`LAR`, `MAR`, `MBR`) y evaluación de flags `NZCV`.
-- `dissasembler.c`: Desensamblado de instrucciones en memoria principal respetando el formato visual oficial.
-- `main.c`: Reserva y liberación de la memoria principal, lectura y validación de la cabecera `VMX26` (versiones 1 y 2), ubicación de los segmentos, inicialización de registros y ciclo de ejecución.
+- `instrucciones.c`: Implementación de las 32 instrucciones (incluidas `PUSH`, `POP`, `CALL` y `RET`), llamadas al sistema (`SYS 0`, `1`, `2`, `3`, `4` y `F`), resolución de operandos (`[reg+offset]`, sectores de registro y modificadores `b`/`w`/`l`), actualización del bus (`LAR`, `MAR`, `MBR`) y evaluación de flags `NZCV`.
+- `dissasembler.c`: Desensamblado del Const Segment y del Code Segment (con la marca `>` del entry point) respetando el formato visual oficial.
+- `main.c`: Parseo de la línea de comandos, reserva y liberación de la memoria principal, lectura y validación de la cabecera `VMX26` (versiones 1 y 2), ubicación de los segmentos, Param Segment, precarga de la pila, imágenes `.vmi`, breakpoints y ciclo de ejecución.
 
 ---
 
@@ -98,9 +98,9 @@ Toda dirección lógica se estructura en 32 bits: `[16 bits Segmento | 16 bits D
 ### 6.3 Instrucciones de Uso:
 
 1. Traducción del código fuente (Assembler a Código Máquina):
-Antes de utilizar la máquina virtual, se debe traducir el programa escrito en lenguaje Assembler (`.asm`) al formato binario ejecutable (`.vmx`) utilizando el traductor provisto por la cátedra. Desde la terminal, ejecutar:
+Antes de utilizar la máquina virtual, se debe traducir el programa escrito en lenguaje Assembler (`.asm`) al formato binario ejecutable (`.vmx`) utilizando el traductor provisto por la cátedra. El parámetro `v=2` genera la cabecera de la versión 2 (con `v=1`, la de la primera parte). Desde la terminal, ejecutar:
 ```bash
-.\vmt.exe programa.asm
+.\vmt.exe programa.asm v=2
 ```
 2. Compilación de la Máquina Virtual:
 Para generar el archivo ejecutable del emulador a partir de los códigos fuente en C, utilizar GCC con banderas estrictas:
@@ -121,4 +121,18 @@ Si se desea forzar a la máquina virtual a mostrar por consola la traza del cód
 Para indicar el tamaño de la memoria en KiB (entre 1 y 64; por defecto 16), se agrega el parámetro opcional `m=M`:
 ```bash
 ./vmx.exe programa.vmx m=32
+```
+6. Parámetros de la subrutina principal:
+Todo lo que sigue al flag `-p` (que siempre va al final) se carga en el Param Segment; `main` los recibe en la pila (`argc` y `argv`):
+```bash
+./vmx.exe programa.vmx -p prueba 01 2
+```
+7. Breakpoints e imágenes:
+Con un archivo `.vmi` además del `.vmx`, cada `SYS F` guarda la imagen y pausa: `g` continúa, `q` sale (la imagen queda para retomarla) y Enter ejecuta una instrucción y vuelve a pausar. La imagen se puede ver con el debugger de la cátedra (`vmg imagen.vmi`):
+```bash
+./vmx.exe programa.vmx imagen.vmi
+```
+Con solo el `.vmi` se retoma la ejecución desde el estado guardado (se ignoran `m=M` y `-p`):
+```bash
+./vmx.exe imagen.vmi
 ```

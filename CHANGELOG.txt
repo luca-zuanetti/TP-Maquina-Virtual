@@ -95,3 +95,79 @@ Todos los cambios notables realizados en este proyecto serán documentados en es
 - Una instrucción cuyo operando produce un fallo de segmento queda abortada: no se leen más operandos ni se escribe el resultado, y `DIV` ya no informa un falso "dividir por 0" a continuación del fallo.
 - `POP` incrementa `SP` antes de guardar el valor desapilado: `POP SP` deja en `SP` el valor extraído en lugar de ese valor + 4.
 - Precedencia de errores en el cargador: un proceso que no entra en la RAM informa "Memoria insuficiente" aunque además su Stack Segment sea menor a 12 bytes; el stack overflow de la precarga se valida después.
+
+## [2.0.3-dev] - 2026-10-27
+
+### Corregido
+- `PUSH` sigue estrictamente los pasos de la consigna: decrementa `SP` en 4, controla el stack overflow y recién después obtiene el valor del operando y lo guarda en la pila. `PUSH SP` apila el `SP` ya decrementado y `PUSH [SP+n]` se calcula con el `SP` nuevo (revierte el cambio de la versión 2.0.2-dev).
+- `POP` sigue estrictamente los pasos de la consigna: extrae los 4 bytes del tope, los asigna al operando y recién después incrementa `SP` en 4. `POP SP` deja en `SP` el valor extraído + 4 y `POP [SP+n]` se calcula con el `SP` sin incrementar (revierte el cambio de la versión 2.0.2-dev).
+
+## [2.0.4-dev] - 2026-10-27
+
+### Añadido
+- `SYS 3` (STRING READ): lee una línea del teclado y la guarda a partir de la dirección de `EDX`, terminada en `\0`. `ECX` indica la cantidad máxima de caracteres (`-1` sin límite); lo que exceda se descarta. No muestra prompt.
+- `SYS 4` (STRING WRITE): imprime a partir de la dirección de `EDX` hasta encontrar un `\0`.
+- `SYS 0` (CLEAR SCREEN): limpia la pantalla con el comando `cls` (solo funciona en Windows).
+- `SYS F` (BREAKPOINT) reservado: por ahora no realiza ninguna acción; se implementará junto con la imagen `.vmi`.
+- Cada carácter leído o escrito por `SYS 3` y `SYS 4` pasa por el bus de memoria (`LAR`, `MAR`, `MBR`) y produce un fallo de segmento si sale de su segmento.
+
+### Corregido
+- `SYS 1` descarta el resto de la línea después de leer cada valor: `scanf` dejaba el Enter en el teclado y una lectura posterior con `SYS 3` lo tomaba como una línea vacía.
+
+### Observaciones
+- Efecto del cambio en `SYS 1`: se espera un valor por línea (uno por cada prompt `[XXXX]:`). Si el usuario escribe varios valores en una misma línea (por ejemplo `25 30` cuando `SYS 1` lee dos valores), solo se toma el primero y el resto de la línea se descarta; el segundo valor se pide en una línea nueva. Antes, el `30` se tomaba como segundo valor sin volver a esperar.
+- Alternativas evaluadas y descartadas:
+  - Que `SYS 3` saltee un Enter inicial: no distingue un Enter sobrante de un string vacío ingresado a propósito, y no cubre restos de línea con texto (por ejemplo ` 30`).
+  - Que `SYS 1` marque con una variable que dejó restos en el teclado y que `SYS 3` los descarte solo en ese caso: mantiene la lectura de varios valores por línea, pero agrega un estado oculto entre dos llamadas al sistema. Queda como opción si se necesitara ese comportamiento.
+
+## [2.0.5-dev] - 2026-10-27
+
+### Añadido
+- Imagen de la máquina virtual (`.vmi`): `guardarImagen` escribe la cabecera (`VMI26`, versión 1 y tamaño de la memoria en KiB), los 32 registros, la tabla de descriptores de segmentos y la memoria principal completa. Todos los valores de más de un byte se guardan en Big Endian, igual que en el resto de la máquina.
+- `cargarImagen` restaura la máquina desde un `.vmi`: crea la memoria con el tamaño de la cabecera y carga registros, tabla y memoria tal como están en el archivo.
+- Ejecución con solo un archivo `.vmi` (sin `.vmx`): se retoma la ejecución desde el estado guardado. En ese caso `m=M` y `-p` se ignoran.
+- Campo `archVmi` en `TMV`: archivo de imagen indicado en la línea de comandos (`NULL` si no se indicó), para los breakpoints.
+
+### Validaciones
+- La carga de un `.vmi` informa error si el archivo no existe, si no empieza con `VMI26` versión 1, si está incompleto o si algún segmento activo de la tabla queda fuera de la memoria.
+
+### Observaciones
+- La consigna no indica el orden de los bytes dentro del `.vmi`; se usa Big Endian. Verificado con el debugger `vmg` de la cátedra: muestra correctamente registros, tabla de segmentos y memoria.
+
+## [2.0.6-dev] - 2026-10-27
+
+### Añadido
+- `SYS F` (BREAKPOINT): si se indicó un archivo `.vmi`, al terminar la instrucción la máquina guarda la imagen en ese archivo y espera la acción del usuario; sin `.vmi` se ignora.
+  - `g`: continúa la ejecución hasta el próximo breakpoint o hasta el final.
+  - `q`: aborta la ejecución sin error; el `.vmi` queda guardado para retomarla.
+  - Enter: ejecuta la siguiente instrucción y vuelve a pausar (paso a paso), sin importar qué haga la instrucción.
+- Mensaje mientras la máquina está pausada: `[Breakpoint] g: continuar | q: salir | Enter: siguiente instruccion >`. Cualquier otra tecla vuelve a preguntar; si la entrada se termina (EOF) se continúa como con `g`.
+- Campos `bpPendiente` y `pasoAPaso` en `TMV`: `SYS F` solo pide el breakpoint y la pausa se realiza en un único lugar del ciclo de ejecución, después de cada instrucción.
+
+### Observaciones
+- Como `IP` se actualiza antes de ejecutar, la imagen guardada en el breakpoint ya apunta a la instrucción siguiente al `SYS F`: al retomar desde el `.vmi` no se repite el breakpoint.
+
+## [2.0.7-dev] - 2026-10-27 (auditoría final)
+
+### Corregido
+- `DIV -2147483648, -1` abortaba el proceso anfitrión (excepción de hardware de x86, sin mensaje). Ahora el cociente es `-2147483648` con V = 1 y el resto 0.
+- `SWAP` afecta `CC` como el último de los tres XOR equivalentes (el nuevo valor de A, es decir el B original), y no como `A XOR B`. Ejemplo: `SWAP` de 5 y 5 dejaba Z = 1.
+- `SHL` enciende V cuando el corrimiento, visto como multiplicación por 2^n, no entra en 32 bits con signo. Coincide con la tabla oficial: `SHL 1073741824, 2` da 0 con Z, C y V en 1 (antes V quedaba en 0).
+- `SUB` y `CMP` detectan el desborde con el minuendo en 0 (`0 - (-2147483648)` dejaba V en 0).
+- `RND` ya no modifica `CC`: no está en la lista de instrucciones que lo afectan. Además cubre todo el rango hasta B (en Windows `rand()` llega solo a 32767).
+- `ADD`, `SUB`, `CMP`, `SHL`, `LDH` y la lectura de 4 bytes de memoria operan en `uint32_t`: el desborde de un entero con signo es indefinido en C y, compilando con `-O2`, GCC eliminaba la detección de V en `ADD 2147483647, 2147483647`. Verificado con `-fsanitize=undefined`.
+- `SYS 1` en modo binario (`EAX` = 0x10) leía el valor en decimal. La lectura numérica ahora admite las cinco bases, con signo y prefijo opcional (`0b`, `0o`, `0x`); las líneas en blanco se saltean.
+- `SYS 2` en binario se muestra sin ceros a la izquierda, como en el ejemplo oficial (`0b1001000 H`), y binario y octal muestran solo los bytes de la celda (`-1` de 1 byte: `0b11111111`, `0xFF`, `0o377`).
+- `SYS` con un operando que produce fallo de segmento (por ejemplo `SYS [KS]` sin Const Segment) ejecutaba además `SYS 0` con el valor 0 devuelto y la pantalla se limpiaba, borrando el mensaje de error.
+- `SYS 1` y `SYS 2` con celdas de más de 4 bytes informan el error en lugar de desplazar fuera del rango de un entero.
+- `SYS 0` vuelca la salida pendiente antes de limpiar la pantalla y usa `clear` fuera de Windows.
+- Una imagen `.vmi` con el registro `CS` fuera de la tabla o en una entrada inactiva provocaba un fallo de segmentación del emulador (con y sin `-d`); ahora se informa como imagen inválida. El desensamblador tampoco lee el Const Segment si `KS` apunta a una entrada inactiva.
+- `OP1` y `OP2` guardan el operando tal cual está codificado: un inmediato negativo queda como `0x0200FFFE` y no `0x02FFFFFE`.
+- Una instrucción de uno o dos operandos sin su operando (tipo 00, por ejemplo el byte `0x0B` solo) informa "Instrucción inválida": en MV2 los 32 códigos de operación existen, así que es la única instrucción inexistente posible.
+
+### Modificado
+- Desensamblador: el mnemónico se alinea a derecha en 4 columnas y cada operando a derecha en 10, igual que el desensamblado del debugger `vmg` de la cátedra (verificado línea por línea).
+
+### Observaciones
+- Las constantes no imprimibles se siguen mostrando con `.` como pide la consigna (`"abc..."`), aunque `vmg` las muestra con secuencias de escape (`"abc\b\n\r"`).
+- `SYS 2` en hexadecimal mantiene el relleno según el tamaño de la celda (`0x0000000A` para 4 bytes); el único ejemplo oficial (`0x4161`, celda de 2 bytes) es compatible con ambos criterios.

@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <limits.h>
+#include <string.h>
+#include <ctype.h>
 #include "mv.h"
 
 /* ========================================================================= */
@@ -45,8 +47,9 @@ static int32_t leerMemoriaHardware(TMV* mv, uint32_t dir_logica, uint16_t cant_b
     } else if (cant_bytes == 2) {
         dato = (int32_t)(int16_t)((mv->mem[dir_fisica] << 8) | mv->mem[dir_fisica + 1]);
     } else { //Asume cant_bytes == 4
-        dato = (int32_t)((mv->mem[dir_fisica] << 24) | (mv->mem[dir_fisica + 1] << 16) |
-                         (mv->mem[dir_fisica + 2] << 8) | mv->mem[dir_fisica + 3]);
+        // Se arma en uint32_t: desplazar un byte >= 0x80 a la posición 24 de un int es indefinido
+        dato = (int32_t)(((uint32_t)mv->mem[dir_fisica] << 24) | ((uint32_t)mv->mem[dir_fisica + 1] << 16) |
+                         ((uint32_t)mv->mem[dir_fisica + 2] << 8) | (uint32_t)mv->mem[dir_fisica + 3]);
     }
     
     mv->reg[MBR] = dato;
@@ -244,20 +247,90 @@ static void actualizarCC(TMV* mv, int n, int z, int c, int v) {
 }
 
 /* ========================================================================= */
+/* AUXILIARES DE LAS LLAMADAS AL SISTEMA                                     */
+/* ========================================================================= */
+
+/**
+ * @brief Lee una línea del teclado y la interpreta como un número en la base
+ *        indicada (2, 8, 10 o 16). Acepta signo y el prefijo de la base
+ *        (0b, 0o o 0x). Consume la línea completa, incluido el Enter; las
+ *        líneas en blanco se saltean (se sigue esperando el valor).
+ *
+ * @return int32_t Valor leído (0 si la línea no contiene un número válido).
+ */
+static int32_t leerNumero(int base) {
+    char linea[128];
+    const char* p;
+    do {
+        if (fgets(linea, sizeof(linea), stdin) == NULL) return 0;
+
+        // Si la línea no entró completa en el búfer se descarta el resto
+        if (strchr(linea, '\n') == NULL) {
+            int resto;
+            while ((resto = getchar()) != '\n' && resto != EOF);
+        }
+
+        p = linea;
+        while (isspace((unsigned char)*p)) p++;
+    } while (*p == '\0');
+
+    int negativo = 0;
+    if (*p == '-' || *p == '+') {
+        negativo = (*p == '-');
+        p++;
+    }
+
+    // Prefijo opcional de la base (0b, 0o, 0x)
+    char prefijo = (base == 2) ? 'b' : (base == 8) ? 'o' : (base == 16) ? 'x' : '\0';
+    if (prefijo != '\0' && p[0] == '0' && tolower((unsigned char)p[1]) == prefijo) {
+        p += 2;
+    }
+
+    // Se interpreta sin signo para admitir los 32 bits completos (por ejemplo 0xFFFFFFFF)
+    uint32_t valor = (uint32_t)strtoul(p, NULL, base);
+    return (int32_t)(negativo ? 0U - valor : valor);
+}
+
+/**
+ * @brief Imprime un valor en binario, sin ceros a la izquierda (formato del
+ *        ejemplo oficial: 'H' -> 0b1001000).
+ */
+static void imprimirBinario(uint32_t valor) {
+    printf(" 0b");
+    int bit = 31;
+    while (bit > 0 && !((valor >> bit) & 1U)) bit--;   // salta los ceros a la izquierda
+    for (; bit >= 0; bit--) {
+        putchar(((valor >> bit) & 1U) ? '1' : '0');
+    }
+}
+
+/* ========================================================================= */
 /* IMPLEMENTACIÓN DE LAS 26 INSTRUCCIONES                                    */
 /* ========================================================================= */
 
-// 0x00: SYS (Llamadas al Sistema: 1 = READ, 2 = WRITE)
+// 0x00: SYS (Llamadas al Sistema: 0 = CLEAR SCREEN, 1 = READ, 2 = WRITE,
+//            3 = STRING READ, 4 = STRING WRITE, F = BREAKPOINT)
 void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB; // SYS utiliza solo el primer operando
 
     int32_t nro_servicio = obtenerValorOperando(mv, tA, vA);
+    // Si el operando falló (por ejemplo SYS [KS] sin Const Segment) no se ejecuta
+    // ningún servicio: con el 0 devuelto se limpiaría la pantalla y se borraría el error
+    if (mv->errorFlag) return;
+
     uint32_t modo        = (uint32_t)mv->reg[EAX];
     uint32_t dir_logica  = (uint32_t)mv->reg[EDX];
     uint16_t cantidad    = (uint16_t)(mv->reg[ECX] & 0xFFFF);
     uint16_t tam_celda   = (uint16_t)((mv->reg[ECX] >> 16) & 0xFFFF);
 
     if (tam_celda == 0) tam_celda = 1;
+
+    // Las celdas de SYS 1 y 2 se convierten a un valor de 32 bits: no pueden superar 4 bytes
+    if ((nro_servicio == 1 || nro_servicio == 2) && tam_celda > 4) {
+        printf("Error: Tamano de celda invalido en SYS %d (%u bytes, maximo 4).\n", nro_servicio, tam_celda);
+        mv->errorFlag = 1;
+        return;
+    }
 
     if (nro_servicio == 1) {
         // SYS READ: Lee valores desde el teclado y los guarda en celdas de memoria
@@ -275,20 +348,23 @@ void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
             mv->reg[MAR] = (int32_t)(((uint32_t)tam_celda << 16) | ((uint32_t)dir_fisica & 0xFFFFU));
             printf("[%04X]: ", dir_fisica);
 
+            // Se lee un valor por línea: el resto de la línea (incluido el Enter) se
+            // descarta para que una lectura posterior (por ejemplo SYS 3) no lo tome
             int32_t entrada = 0;
             if (modo & 0x02) {
                 // Modo Carácter
                 char c = 0;
                 if (scanf(" %c", &c) == 1) entrada = (int32_t)c;
+                int resto;
+                while ((resto = getchar()) != '\n' && resto != EOF);
+            } else if (modo & 0x10) {
+                entrada = leerNumero(2);    // Modo Binario
             } else if (modo & 0x08) {
-                // Modo Hexadecimal
-                if (scanf("%x", (unsigned int*)&entrada) != 1) entrada = 0;
+                entrada = leerNumero(16);   // Modo Hexadecimal
             } else if (modo & 0x04) {
-                // Modo Octal
-                if (scanf("%o", (unsigned int*)&entrada) != 1) entrada = 0;
+                entrada = leerNumero(8);    // Modo Octal
             } else {
-                // Modo Decimal por defecto
-                if (scanf("%d", &entrada) != 1) entrada = 0;
+                entrada = leerNumero(10);   // Modo Decimal por defecto
             }
 
             mv->reg[MBR] = entrada;
@@ -332,23 +408,23 @@ void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
             mv->reg[MBR] = val_mostrar;
             printf("[%04X]:", dir_fisica);
 
+            // Binario, hexadecimal y octal muestran solo los bytes de la celda
+            // (un -1 de 1 byte es 0b11111111, 0xFF y 0o377)
+            uint32_t sin_signo = dato;
+
             // Salida en Binario (Bit 4 = 0x10)
             if (modo & 0x10) {
-                printf(" 0b");
-                int bits = tam_celda * 8;
-                for (int b = bits - 1; b >= 0; b--) {
-                    putchar((val_mostrar & (1 << b)) ? '1' : '0');
-                }
+                imprimirBinario(sin_signo);
             }
             // Salida en Hexadecimal (Bit 3 = 0x08)
             if (modo & 0x08) {
-                if (tam_celda == 1)      printf(" 0x%02X", val_mostrar & 0xFF);
-                else if (tam_celda == 2) printf(" 0x%04X", val_mostrar & 0xFFFF);
-                else                     printf(" 0x%08X", val_mostrar);
+                if (tam_celda == 1)      printf(" 0x%02X", (unsigned int)sin_signo);
+                else if (tam_celda == 2) printf(" 0x%04X", (unsigned int)sin_signo);
+                else                     printf(" 0x%08X", (unsigned int)sin_signo);
             }
             // Salida en Octal (Bit 2 = 0x04)
             if (modo & 0x04) {
-                printf(" 0o%o", val_mostrar);
+                printf(" 0o%o", (unsigned int)sin_signo);
             }
             // Salida en Caracteres (Bit 1 = 0x02)
             if (modo & 0x02) {
@@ -364,7 +440,50 @@ void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
             }
             printf("\n");
         }
-    } 
+    }
+    else if (nro_servicio == 3) {
+        // SYS STRING READ: lee una línea y la guarda desde EDX terminada en '\0'.
+        // ECX = máximo de caracteres (-1: sin límite); lo que exceda se descarta.
+        // Sin prompt [XXXX]: (la consigna no lo muestra para strings)
+        int32_t maximo = mv->reg[ECX];
+        int32_t leidos = 0;
+        int c;
+
+        while ((c = getchar()) != EOF && c != '\n') {
+            if (c == '\r') continue;                          // fin de línea de Windows
+            if (maximo != -1 && leidos >= maximo) continue;   // excede el máximo: se descarta
+            escribirMemoriaHardware(mv, dir_logica + (uint32_t)leidos, 1, c);
+            if (mv->errorFlag) return;
+            leidos++;
+        }
+        escribirMemoriaHardware(mv, dir_logica + (uint32_t)leidos, 1, 0);
+    }
+    else if (nro_servicio == 4) {
+        // SYS STRING WRITE: imprime desde EDX hasta encontrar '\0'
+        uint32_t dir = dir_logica;
+        for (;;) {
+            uint8_t c = (uint8_t)leerMemoriaHardware(mv, dir, 1);
+            if (mv->errorFlag || c == 0) break;
+            putchar(c);
+            dir++;
+        }
+        fflush(stdout);
+    }
+    else if (nro_servicio == 0) {
+        // SYS CLEAR SCREEN: limpia la pantalla (no usa ni modifica registros).
+        // Antes se vuelca la salida pendiente para que no aparezca después de limpiar
+        fflush(stdout);
+#ifdef _WIN32
+        system("cls");
+#else
+        system("clear");
+#endif
+    }
+    else if (nro_servicio == 0xF) {
+        // SYS BREAKPOINT: solo si se indicó un .vmi; la pausa la realiza el ciclo de ejecución
+        if (mv->archVmi != NULL) mv->bpPendiente = 1;
+    }
+    // Cualquier otro número de servicio se ignora
 }
 
 // 0x01: JMP (Salto Incondicional)
@@ -455,16 +574,19 @@ void op_stop(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 // 0x0B: PUSH (Apila un valor de 4 bytes)
 void op_push(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
-    // El operando se lee antes de mover SP: PUSH SP o PUSH [SP+n] usan el SP original
-    int32_t valor = obtenerValorOperando(mv, tA, vA);
-    if (mv->errorFlag) return;
-
+    // 1. Decrementar SP en 4
     mv->reg[SP] -= 4;
+    // 2. Si SP queda por debajo del comienzo del Stack Segment: stack overflow
     if (mv->reg[SP] < mv->reg[SS]) {
         printf("Error: Stack overflow.\n");
         mv->errorFlag = 1;
         return;
     }
+    // 3 y 4. Obtener el valor del operando, ya extendido a 4 bytes
+    //        (PUSH SP o PUSH [SP+n] usan el SP ya decrementado)
+    int32_t valor = obtenerValorOperando(mv, tA, vA);
+    if (mv->errorFlag) return;
+    // 5. Guardarlo en la pila en big endian: el byte más significativo queda en el tope
     escribirMemoriaHardware(mv, (uint32_t)mv->reg[SP], 4, valor);
 }
 
@@ -477,11 +599,15 @@ void op_pop(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
         mv->errorFlag = 1;
         return;
     }
+    // 1 a 3. Extraer los 4 bytes del tope (el byte del tope es el más significativo)
     int32_t valor = leerMemoriaHardware(mv, (uint32_t)mv->reg[SP], 4);
     if (mv->errorFlag) return;
-    // SP se libera antes de guardar: POP SP deja el valor desapilado (no ese valor + 4)
-    mv->reg[SP] += 4;
+    // 4. Asignar al operando (si es menor a 4 bytes se truncan los más significativos)
+    //    POP [SP+n] calcula la dirección con el SP todavía sin incrementar
     guardarResultado(mv, tA, vA, valor);
+    if (mv->errorFlag) return;
+    // 5. Incrementar SP en 4
+    mv->reg[SP] += 4;
 }
 
 // 0x0D: CALL (Llamada a subrutina)
@@ -528,7 +654,9 @@ void op_mov(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 void op_add(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t b = obtenerValorOperando(mv, tB, vB);
-    int32_t res = a + b;
+    // La suma se hace sin signo: el desborde de un int32_t es indefinido en C y,
+    // compilando con optimizaciones, el compilador puede eliminar la detección de V
+    int32_t res = (int32_t)((uint32_t)a + (uint32_t)b);
     guardarResultado(mv, tA, vA, res);
 
     // Carry: suma sin signo excede 32 bits
@@ -536,7 +664,7 @@ void op_add(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int c = (u_sum >> 32) & 1;
 
     // Overflow: suma de operandos del mismo signo produce resultado de signo opuesto
-    int v = ((a > 0 && b > 0 && res < 0) || (a < 0 && b < 0 && res >= 0));
+    int v = ((a ^ res) & (b ^ res)) < 0;
 
     actualizarCC(mv, res < 0, res == 0, c, v);
 }
@@ -545,7 +673,7 @@ void op_add(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 void op_sub(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t b = obtenerValorOperando(mv, tB, vB);
-    int32_t res = a - b;
+    int32_t res = (int32_t)((uint32_t)a - (uint32_t)b);   // sin signo: ver op_add
     guardarResultado(mv, tA, vA, res);
 
     // Carry en resta: carry-out de la suma a + (~b + 1)
@@ -553,8 +681,9 @@ void op_sub(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     uint64_t sum_sub = (uint64_t)(uint32_t)a + comp_b;
     int c = (sum_sub >> 32) & 1;
 
-    // Overflow con signo en resta
-    int v = ((a > 0 && b < 0 && res < 0) || (a < 0 && b > 0 && res >= 0));
+    // Overflow con signo en resta: operandos de distinto signo y el resultado
+    // con el signo de b (incluye 0 - (-2147483648))
+    int v = ((a ^ b) & (a ^ res)) < 0;
 
     actualizarCC(mv, res < 0, res == 0, c, v);
 }
@@ -584,25 +713,30 @@ void op_div(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
         return;
     }
 
-    int32_t cociente = a / b;
-    int32_t resto    = a % b;
+    // -2147483648 / -1 no entra en 32 bits: en C es indefinido y en x86 aborta el
+    // proceso anfitrión. Se resuelve como el hardware de 32 bits: cociente
+    // -2147483648 (desborde, V = 1) y resto 0
+    int desborde = (a == INT32_MIN && b == -1);
+    int32_t cociente = desborde ? INT32_MIN : a / b;
+    int32_t resto    = desborde ? 0 : a % b;
 
     guardarResultado(mv, tA, vA, cociente);
+    if (mv->errorFlag) return;
     mv->reg[AC] = resto;
 
-    actualizarCC(mv, cociente < 0, cociente == 0, 0, 0);
+    actualizarCC(mv, cociente < 0, cociente == 0, 0, desborde);
 }
 
 // 0x15: CMP (Compara A con B calculando A - B sin guardar el resultado)
 void op_cmp(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t b = obtenerValorOperando(mv, tB, vB);
-    int32_t res = a - b;
+    int32_t res = (int32_t)((uint32_t)a - (uint32_t)b);   // sin signo: ver op_add
 
     uint64_t comp_b = (uint32_t)(~b) + 1ULL;
     uint64_t sum_sub = (uint64_t)(uint32_t)a + comp_b;
     int c = (sum_sub >> 32) & 1;
-    int v = ((a > 0 && b < 0 && res < 0) || (a < 0 && b > 0 && res >= 0));
+    int v = ((a ^ b) & (a ^ res)) < 0;   // mismo criterio que op_sub
 
     actualizarCC(mv, res < 0, res == 0, c, v);
 }
@@ -635,9 +769,9 @@ void op_swap(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     guardarResultado(mv, tA, vA, valB);
     guardarResultado(mv, tB, vB, valA);
 
-    // Afecta CC igual que un XOR entre ambos valores
-    int32_t res = valA ^ valB;
-    actualizarCC(mv, res < 0, res == 0, 0, 0);
+    // SWAP equivale a XOR A,B / XOR B,A / XOR A,B y afecta CC como el último XOR,
+    // cuyo resultado es el nuevo valor de A (el B original)
+    actualizarCC(mv, valB < 0, valB == 0, 0, 0);
 }
 
 // 0x1A: SHL (Desplazamiento lógico a la izquierda)
@@ -645,13 +779,16 @@ void op_shl(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t n = obtenerValorOperando(mv, tB, vB) & 0x1F; // Acotado a 0..31 bits
 
-    int32_t res = (n == 0) ? a : (a << n);
+    // Corrimiento sin signo: desplazar un int32_t negativo a la izquierda es indefinido
+    int32_t res = (int32_t)((uint32_t)a << n);
     guardarResultado(mv, tA, vA, res);
 
     // Carry: último bit desplazado fuera del límite de 32 bits
     int c = (n > 0) ? (int)((((uint32_t)a) >> (32 - n)) & 1U) : 0;
-    // Overflow: el signo cambió durante el corrimiento
-    int v = (n > 0) ? (((a ^ res) >> 31) & 1) : 0;
+    // Overflow: SHL equivale a multiplicar por 2^n; V se enciende si ese producto no
+    // entra en 32 bits con signo (tabla oficial: SHL 1073741824, 2 -> 0 con C = 1 y V = 1)
+    int64_t producto = (int64_t)a * ((int64_t)1 << n);
+    int v = (producto > INT32_MAX || producto < INT32_MIN);
 
     actualizarCC(mv, res < 0, res == 0, c, v);
 }
@@ -693,16 +830,21 @@ void op_ldl(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 void op_ldh(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t b = obtenerValorOperando(mv, tB, vB);
-    int32_t res = (a & 0x0000FFFF) | ((b & 0xFFFF) << 16);
+    int32_t res = (int32_t)(((uint32_t)a & 0x0000FFFFU) | (((uint32_t)b & 0xFFFFU) << 16));
     guardarResultado(mv, tA, vA, res);
 }
 
-// 0x1F: RND (Genera un número pseudoaleatorio entre 0 y B)
+// 0x1F: RND (Genera un número pseudoaleatorio entre 0 y B). No afecta CC: no está
+// en la lista de instrucciones que lo modifican
 void op_rnd(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t b = obtenerValorOperando(mv, tB, vB);
-    int32_t res = (b > 0) ? (rand() % (b + 1)) : 0;
+    int32_t res = 0;
+    if (b > 0) {
+        // rand() puede llegar solo a 32767 (Windows): se combinan tres llamadas para cubrir 32 bits
+        uint32_t aleatorio = ((uint32_t)rand() << 30) ^ ((uint32_t)rand() << 15) ^ (uint32_t)rand();
+        res = (int32_t)(aleatorio % ((uint32_t)b + 1U));
+    }
     guardarResultado(mv, tA, vA, res);
-    actualizarCC(mv, res < 0, res == 0, 0, 0);
 }
 
 /* ========================================================================= */
