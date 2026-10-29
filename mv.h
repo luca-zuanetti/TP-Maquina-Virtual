@@ -7,7 +7,8 @@
 /* CONSTANTES DE ARQUITECTURA                            */
 /* ========================================================================= */
 #define MEM_DEFAULT_KIB 16      /* Tamaño por defecto de la memoria principal (m=M omitido) */
-#define MEM_MAX_KIB     64      /* Máximo direccionable con bases/offsets de 16 bits */
+#define MEM_MAX_KIB     65535   /* Máximo representable en la cabecera .vmi (2 bytes) */
+#define ESPACIO_DIRECCIONABLE 0x10000U /* Bases y MAR de 16 bits: el proceso debe entrar en los primeros 64 KiB */
 #define SEG_AMOUNT      8       /* Entradas en la tabla de descriptores de segmentos */
 #define HEADER_SIZE_V1  8       /* Tamaño en bytes de la cabecera .vmx versión 1 */
 #define HEADER_SIZE_V2  18      /* Tamaño en bytes de la cabecera .vmx versión 2 */

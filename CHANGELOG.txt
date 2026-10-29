@@ -2,6 +2,19 @@
 
 Todos los cambios notables realizados en este proyecto serán documentados en este archivo.
 
+## [1.0.0] - 2026-09-18
+
+### Añadido
+- Constantes hexadecimales de 32 bits en `mv.h` para los flags del registro CC (`CC_N`, `CC_Z`, `CC_C`, `CC_V`).
+- Definición centralizada del tipo de función `InstruccionFunc` y de la tabla de despacho `tablaInstrucciones[32]` en `mv.h`.
+
+### Modificado
+- Reubicación de las máscaras de banderas hacia `mv.h` para que ocupen los bits 31 a 28.
+- Actualización de la enumeración de registros en `mv.h` conforme al mapa de hardware 2026 (`IP = 0`, `LAR = 4`, etc.).
+
+### Eliminado
+- Archivo de cabecera redundante `instrucciones.h`, unificando el contrato global de hardware y operaciones en `mv.h`.
+
 ## [1.1.0] - 2026-09-18
 
 ### Añadido
@@ -17,19 +30,6 @@ Todos los cambios notables realizados en este proyecto serán documentados en es
 
 ### Eliminado
 - Inclusión residual de `instrucciones.h` en `main.c` y documentación técnica.
-
-## [1.0.0] - 2026-09-18
-
-### Añadido
-- Constantes hexadecimales de 32 bits en `mv.h` para los flags del registro CC (`CC_N`, `CC_Z`, `CC_C`, `CC_V`).
-- Definición centralizada del tipo de función `InstruccionFunc` y de la tabla de despacho `tablaInstrucciones[32]` en `mv.h`.
-
-### Modificado
-- Reubicación de las máscaras de banderas hacia `mv.h` para que ocupen los bits 31 a 28.
-- Actualización de la enumeración de registros en `mv.h` conforme al mapa de hardware 2026 (`IP = 0`, `LAR = 4`, etc.).
-
-### Eliminado
-- Archivo de cabecera redundante `instrucciones.h`, unificando el contrato global de hardware y operaciones en `mv.h`.
 
 ## [1.1.1] - 2026-09-19
 
@@ -171,3 +171,34 @@ Todos los cambios notables realizados en este proyecto serán documentados en es
 ### Observaciones
 - Las constantes no imprimibles se siguen mostrando con `.` como pide la consigna (`"abc..."`), aunque `vmg` las muestra con secuencias de escape (`"abc\b\n\r"`).
 - `SYS 2` en hexadecimal mantiene el relleno según el tamaño de la celda (`0x0000000A` para 4 bytes); el único ejemplo oficial (`0x4161`, celda de 2 bytes) es compatible con ambos criterios.
+
+## [2.0.8-dev] - 2026-10-28 (validación de las auditorías)
+
+### Corregido
+- `SWAP reg, [reg+n]` escribía en una dirección equivocada cuando el registro A era también la base del operando de memoria B (`SWAP EAX, [EAX]` abortaba con fallo de segmento y `SWAP AL, b[EAX+3]` escribía en otra celda sin avisar). Si A es registro y B es memoria, ahora se escribe primero B.
+- `CALL` sigue la equivalencia de la consigna (`PUSH IP` seguido de `JMP`): primero decrementa `SP`, controla el stack overflow y apila `IP`; recién después obtiene el destino. Así `CALL [SP+n]` usa el `SP` ya decrementado, el stack overflow se informa antes que un fallo del operando y `LAR`, `MAR` y `MBR` reflejan la lectura del destino.
+- `PUSH` y `CALL` decrementan `SP` en 32 bits sin signo: con `SP` cercano a `0x80000000` la resta era un desborde de entero con signo (comportamiento indefinido en C99).
+- `SYS 1` en modo carácter acepta el espacio (antes `scanf(" %c")` lo salteaba y corría el resto de los datos una celda). Las líneas vacías se siguen salteando.
+- `SYS 1` vuelca el prompt `[XXXX]:` y `SYS 3` vuelca la salida pendiente antes de leer el teclado: con la salida por tubería (por ejemplo Git Bash/mintty) el prompt aparecía después de la entrada.
+- Una instrucción cortada al final del Code Segment se informa como "Instrucción inválida" y no como fallo de segmento (TP MV1: la lectura de la instrucción no produce fallo de segmento). La falta de operando se controla antes que el largo.
+- Un segundo archivo `.vmx` o `.vmi` en la línea de comandos se informa como "Argumento repetido" (antes reemplazaba al primero sin avisar). Los nombres que siguen a `-p` siguen siendo parámetros.
+
+### Modificado
+- `m=M` admite hasta 65535 KiB (el máximo de la cabecera `.vmi`). Como las bases de la tabla y la dirección física de `MAR` son de 16 bits, el proceso completo debe entrar en los primeros 64 KiB: si no, se informa "Memoria insuficiente". En los ejecutables versión 1 el Data Segment ocupa el resto de esos 64 KiB.
+- README: compilación con `-pedantic` y nuevo rango de `m=M`. CHANGELOG ordenado cronológicamente.
+
+### Observaciones
+- No se aplicaron tres propuestas del informe de QA porque contradicen la consigna: quitar el nombre del `.vmx` del Param Segment (TP MV2 pág. 5-6: 37 bytes y `argc` = 4 en el ejemplo), que `MOV` y `SWAP` no modifiquen `CC` (TP MV1 pág. 8) y que `SYS 3` tome el máximo solo de `CX` (la consigna dice `ECX`).
+- En modo paso a paso se mantiene la pausa después de `STOP` o del `RET` final: la consigna pide un nuevo breakpoint "sin importar qué haga dicha instrucción".
+
+## [2.0.9-dev] - 2026-10-28 (auditoría final)
+
+### Corregido
+- `SHR` sobre operandos de 1 o 2 bytes (`AL`, `AH`, `AX`, `b[...]`, `w[...]`) completa con ceros los bits que quedan libres, como pide la consigna (ASM MV1 pág. 3). Antes corría el valor ya extendido en signo y, con un valor negativo, se comportaba como `SAR`: `SHR b[0], 1` con 0x80 daba 0xC0 en lugar de 0x40 y `SHR AX, 4` con 0x8000 daba 0xF800 en lugar de 0x0800. Los operandos de 4 bytes no cambian.
+- `AND`, `OR` y `XOR` leen el operando A y después el B en sentencias separadas, como el resto de las instrucciones. El orden de evaluación de los dos lados de un `&`, `|` o `^` no está especificado en C99: el orden de los accesos a memoria (y el error informado si fallaban ambos operandos) dependía del compilador.
+- Los prompts `[XXXX]:` de `SYS 1` y `SYS 2` imprimen la dirección física como `unsigned int` (compila limpio con `-Wformat-signedness`).
+
+### Modificado
+- Las funciones internas de `instrucciones.c` (`escribirMemoriaHardware`, `obtenerValorOperando`, `guardarResultado` y todas las `op_*`) pasan a ser `static`, porque solo se usan dentro del archivo y a través de la tabla de despacho (compila limpio con `-Wmissing-prototypes`).
+- Comentarios actualizados: la lectura y la escritura en memoria son de 1, 2 o 4 bytes, y las instrucciones son 32 códigos de operación.
+- README: descripción del bit C (acarreo de `A + ~B + 1` en `SUB` y `CMP`), rango físico de la memoria y nueva sección 6.4 sobre la salida de los mensajes de error y los códigos de salida.
