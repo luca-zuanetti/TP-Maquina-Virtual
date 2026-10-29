@@ -11,16 +11,17 @@
 /* ========================================================================= */
 
 /**
- * @brief Lee 4 bytes de memoria simulando el bus de datos del hardware.
- * 
+ * @brief Lee 1, 2 o 4 bytes de memoria simulando el bus de datos del hardware.
+ *
  * Cumple con el requisito de la cátedra:
  * - Carga en LAR la dirección lógica solicitada.
  * - Carga en MAR la cantidad de bytes (parte alta) y la dirección física (parte baja).
- * - Carga en MBR el dato de 32 bits leído en formato Big Endian.
- * 
+ * - Carga en MBR el dato leído en formato Big Endian, extendido en signo a 32 bits.
+ *
  * @param mv         Puntero a la estructura de la Máquina Virtual.
  * @param dir_logica Dirección lógica compuesta por [Segmento:Offset].
- * @return int32_t   Valor de 32 bits leído con signo.
+ * @param cant_bytes Cantidad de bytes a leer (1, 2 o 4).
+ * @return int32_t   Valor leído, extendido en signo a 32 bits.
  */
 static int32_t leerMemoriaHardware(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes) {
     // 1. El procesador coloca la dirección lógica en LAR
@@ -57,16 +58,17 @@ static int32_t leerMemoriaHardware(TMV* mv, uint32_t dir_logica, uint16_t cant_b
 }
 
 /**
- * @brief Escribe 4 bytes en memoria simulando el bus de datos del hardware.
- * 
- * Actualiza LAR, MAR y MBR, y descompone el valor de 32 bits en 4 celdas
- * de 1 byte en orden Big Endian.
- * 
+ * @brief Escribe 1, 2 o 4 bytes en memoria simulando el bus de datos del hardware.
+ *
+ * Actualiza LAR, MAR y MBR, y descompone el valor en cant_bytes celdas de
+ * 1 byte en orden Big Endian (se truncan los bytes más significativos).
+ *
  * @param mv         Puntero a la Máquina Virtual.
  * @param dir_logica Dirección lógica de destino [Segmento:Offset].
+ * @param cant_bytes Cantidad de bytes a escribir (1, 2 o 4).
  * @param valor      Entero de 32 bits a escribir.
  */
-void escribirMemoriaHardware(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes, int32_t valor) {
+static void escribirMemoriaHardware(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes, int32_t valor) {
     mv->reg[LAR] = (int32_t)dir_logica;
     int32_t dir_fisica = traducirDireccion(mv, dir_logica, cant_bytes);
     
@@ -139,7 +141,7 @@ static int calcularDireccionMemoria(TMV* mv, int32_t raw_val, uint32_t* dir_logi
  * @param raw_val Valor bruto leído durante la etapa de Decode.
  * @return int32_t Valor resuelto y extendido a 32 bits.
  */
-int32_t obtenerValorOperando(TMV* mv, uint8_t tipo, int32_t raw_val) {
+static int32_t obtenerValorOperando(TMV* mv, uint8_t tipo, int32_t raw_val) {
     // Si un operando anterior ya falló, la instrucción quedó abortada: no se accede a memoria
     if (mv->errorFlag) return 0;
 
@@ -174,6 +176,23 @@ int32_t obtenerValorOperando(TMV* mv, uint8_t tipo, int32_t raw_val) {
 }
 
 /**
+ * @brief Cantidad de bytes de un operando: según el sector si es un registro
+ *        (EAX: 4, AX: 2, AL y AH: 1) o según el modificador si es de memoria
+ *        (b: 1, w: 2, l o sin prefijo: 4). Un inmediato se considera de 4 bytes.
+ */
+static int cantBytesOperando(uint8_t tipo, int32_t raw_val) {
+    if (tipo == 1) {
+        uint8_t sector = (raw_val >> 5) & 0x03;
+        return (sector == 0) ? 4 : (sector == 3) ? 2 : 1;
+    }
+    if (tipo == 3) {
+        uint8_t mod = (raw_val >> 5) & 0x07;
+        return (mod == 1) ? 1 : (mod == 2) ? 2 : 4;
+    }
+    return 4;
+}
+
+/**
  * @brief Guarda un resultado de 32 bits en el operando de destino (A).
  * 
  * @param mv      Puntero a la Máquina Virtual.
@@ -181,7 +200,7 @@ int32_t obtenerValorOperando(TMV* mv, uint8_t tipo, int32_t raw_val) {
  * @param raw_val Valor bruto decodificado del operando destino.
  * @param valor   Valor que se desea escribir.
  */
-void guardarResultado(TMV* mv, uint8_t tipo, int32_t raw_val, int32_t valor) {
+static void guardarResultado(TMV* mv, uint8_t tipo, int32_t raw_val, int32_t valor) {
     // Una instrucción abortada (fallo al leer sus operandos) no escribe su resultado
     if (mv->errorFlag) return;
 
@@ -305,12 +324,12 @@ static void imprimirBinario(uint32_t valor) {
 }
 
 /* ========================================================================= */
-/* IMPLEMENTACIÓN DE LAS 26 INSTRUCCIONES                                    */
+/* IMPLEMENTACIÓN DE LAS INSTRUCCIONES (32 CÓDIGOS DE OPERACIÓN)             */
 /* ========================================================================= */
 
 // 0x00: SYS (Llamadas al Sistema: 0 = CLEAR SCREEN, 1 = READ, 2 = WRITE,
 //            3 = STRING READ, 4 = STRING WRITE, F = BREAKPOINT)
-void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB; // SYS utiliza solo el primer operando
 
     int32_t nro_servicio = obtenerValorOperando(mv, tA, vA);
@@ -346,17 +365,24 @@ void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
             }
 
             mv->reg[MAR] = (int32_t)(((uint32_t)tam_celda << 16) | ((uint32_t)dir_fisica & 0xFFFFU));
-            printf("[%04X]: ", dir_fisica);
+            printf("[%04X]: ", (unsigned int)dir_fisica);
+            fflush(stdout);   // el prompt debe verse antes de esperar la entrada
 
             // Se lee un valor por línea: el resto de la línea (incluido el Enter) se
             // descarta para que una lectura posterior (por ejemplo SYS 3) no lo tome
             int32_t entrada = 0;
             if (modo & 0x02) {
-                // Modo Carácter
-                char c = 0;
-                if (scanf(" %c", &c) == 1) entrada = (int32_t)c;
-                int resto;
-                while ((resto = getchar()) != '\n' && resto != EOF);
+                // Modo Carácter: el dato es el primer carácter de la línea, incluido
+                // el espacio; las líneas vacías se saltean, como en la lectura numérica
+                int c;
+                do {
+                    c = getchar();
+                } while (c == '\n' || c == '\r');
+                if (c != EOF) {
+                    entrada = (int32_t)(char)c;
+                    int resto;
+                    while ((resto = getchar()) != '\n' && resto != EOF);
+                }
             } else if (modo & 0x10) {
                 entrada = leerNumero(2);    // Modo Binario
             } else if (modo & 0x08) {
@@ -406,7 +432,7 @@ void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
             }
 
             mv->reg[MBR] = val_mostrar;
-            printf("[%04X]:", dir_fisica);
+            printf("[%04X]:", (unsigned int)dir_fisica);
 
             // Binario, hexadecimal y octal muestran solo los bytes de la celda
             // (un -1 de 1 byte es 0b11111111, 0xFF y 0o377)
@@ -449,6 +475,7 @@ void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
         int32_t leidos = 0;
         int c;
 
+        fflush(stdout);   // lo escrito antes (por ejemplo con SYS 2) debe verse antes de leer
         while ((c = getchar()) != EOF && c != '\n') {
             if (c == '\r') continue;                          // fin de línea de Windows
             if (maximo != -1 && leidos >= maximo) continue;   // excede el máximo: se descarta
@@ -487,13 +514,13 @@ void op_sys(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x01: JMP (Salto Incondicional)
-void op_jmp(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_jmp(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
     realizarSalto(mv, obtenerValorOperando(mv, tA, vA));
 }
 
 // 0x02: JP (Salto si es estrictamente positivo: N == 0 y Z == 0)
-void op_jp(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_jp(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
     if (!(mv->reg[CC] & CC_N) && !(mv->reg[CC] & CC_Z)) {
         realizarSalto(mv, obtenerValorOperando(mv, tA, vA));
@@ -501,7 +528,7 @@ void op_jp(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x03: JN (Salto si es negativo: N == 1)
-void op_jn(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_jn(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
     if (mv->reg[CC] & CC_N) {
         realizarSalto(mv, obtenerValorOperando(mv, tA, vA));
@@ -509,7 +536,7 @@ void op_jn(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x04: JZ (Salto si es cero: Z == 1)
-void op_jz(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_jz(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
     if (mv->reg[CC] & CC_Z) {
         realizarSalto(mv, obtenerValorOperando(mv, tA, vA));
@@ -517,7 +544,7 @@ void op_jz(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x05: JC (Salto si hay acarreo: C == 1)
-void op_jc(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_jc(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
     if (mv->reg[CC] & CC_C) {
         realizarSalto(mv, obtenerValorOperando(mv, tA, vA));
@@ -525,7 +552,7 @@ void op_jc(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x06: JV (Salto si hay desbordamiento: V == 1)
-void op_jv(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_jv(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
     if (mv->reg[CC] & CC_V) {
         realizarSalto(mv, obtenerValorOperando(mv, tA, vA));
@@ -533,7 +560,7 @@ void op_jv(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x07: JNP (Salto si no es positivo: N == 1 o Z == 1)
-void op_jnp(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_jnp(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
     if ((mv->reg[CC] & CC_N) || (mv->reg[CC] & CC_Z)) {
         realizarSalto(mv, obtenerValorOperando(mv, tA, vA));
@@ -541,7 +568,7 @@ void op_jnp(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x08: JNN (Salto si no es negativo: N == 0)
-void op_jnn(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_jnn(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
     if (!(mv->reg[CC] & CC_N)) {
         realizarSalto(mv, obtenerValorOperando(mv, tA, vA));
@@ -549,7 +576,7 @@ void op_jnn(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x09: JNZ (Salto si no es cero: Z == 0)
-void op_jnz(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_jnz(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
     if (!(mv->reg[CC] & CC_Z)) {
         realizarSalto(mv, obtenerValorOperando(mv, tA, vA));
@@ -557,7 +584,7 @@ void op_jnz(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x0A: NOT (Negación bit a bit: A = ~A)
-void op_not(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_not(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
     int32_t valA = obtenerValorOperando(mv, tA, vA);
     int32_t res  = ~valA;
@@ -566,16 +593,16 @@ void op_not(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x0F: STOP (Detiene el procesador fijando IP = 0xFFFFFFFF)
-void op_stop(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_stop(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tA; (void)vA; (void)tB; (void)vB;
     mv->reg[IP] = (int32_t)0xFFFFFFFF;
 }
 
 // 0x0B: PUSH (Apila un valor de 4 bytes)
-void op_push(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_push(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
-    // 1. Decrementar SP en 4
-    mv->reg[SP] -= 4;
+    // 1. Decrementar SP en 4 (sin signo: restar a un int32_t cercano al mínimo es indefinido)
+    mv->reg[SP] = (int32_t)((uint32_t)mv->reg[SP] - 4U);
     // 2. Si SP queda por debajo del comienzo del Stack Segment: stack overflow
     if (mv->reg[SP] < mv->reg[SS]) {
         printf("Error: Stack overflow.\n");
@@ -591,7 +618,7 @@ void op_push(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x0C: POP (Desapila 4 bytes hacia un operando)
-void op_pop(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_pop(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
     int32_t dir_fisica = traducirDireccion(mv, (uint32_t)mv->reg[SP], 4);
     if (dir_fisica < 0) {
@@ -610,26 +637,28 @@ void op_pop(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     mv->reg[SP] += 4;
 }
 
-// 0x0D: CALL (Llamada a subrutina)
-void op_call(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+// 0x0D: CALL (Llamada a subrutina): equivale a PUSH IP seguido de JMP al operando
+static void op_call(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tB; (void)vB;
-    // Igual que en PUSH, el destino se lee antes de mover SP (CALL [SP+n] usa el SP original)
-    int32_t destino_offset = obtenerValorOperando(mv, tA, vA);
-    if (mv->errorFlag) return;
-
-    mv->reg[SP] -= 4;
+    // PUSH IP: decrementar SP en 4 (sin signo, ver op_push) y controlar el stack overflow
+    mv->reg[SP] = (int32_t)((uint32_t)mv->reg[SP] - 4U);
     if (mv->reg[SP] < mv->reg[SS]) {
         printf("Error: Stack overflow en CALL.\n");
         mv->errorFlag = 1;
         return;
     }
+    // IP ya apunta a la instrucción siguiente: es la dirección de retorno
     escribirMemoriaHardware(mv, (uint32_t)mv->reg[SP], 4, mv->reg[IP]);
+    if (mv->errorFlag) return;
+
+    // JMP: el destino se obtiene después de apilar (CALL [SP+n] usa el SP ya decrementado)
+    int32_t destino_offset = obtenerValorOperando(mv, tA, vA);
     if (mv->errorFlag) return;
     mv->reg[IP] = (mv->reg[CS] & 0xFFFF0000) | ((uint32_t)destino_offset & 0xFFFF);
 }
 
 // 0x0E: RET (Retorno de subrutina)
-void op_ret(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_ret(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     (void)tA; (void)vA; (void)tB; (void)vB;
     int32_t dir_fisica = traducirDireccion(mv, (uint32_t)mv->reg[SP], 4);
     if (dir_fisica < 0) {
@@ -644,14 +673,14 @@ void op_ret(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x10: MOV (Asignación: A = B)
-void op_mov(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_mov(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t valB = obtenerValorOperando(mv, tB, vB);
     guardarResultado(mv, tA, vA, valB);
     actualizarCC(mv, valB < 0, valB == 0, 0, 0);
 }
 
 // 0x11: ADD (Suma: A = A + B)
-void op_add(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_add(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t b = obtenerValorOperando(mv, tB, vB);
     // La suma se hace sin signo: el desborde de un int32_t es indefinido en C y,
@@ -670,7 +699,7 @@ void op_add(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x12: SUB (Resta: A = A - B)
-void op_sub(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_sub(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t b = obtenerValorOperando(mv, tB, vB);
     int32_t res = (int32_t)((uint32_t)a - (uint32_t)b);   // sin signo: ver op_add
@@ -689,7 +718,7 @@ void op_sub(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x13: MUL (Multiplicación: A = A * B)
-void op_mul(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_mul(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t b = obtenerValorOperando(mv, tB, vB);
     int64_t prod64 = (int64_t)a * (int64_t)b;
@@ -702,7 +731,7 @@ void op_mul(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x14: DIV (División entera: A = A / B, Resto en AC)
-void op_div(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_div(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t b = obtenerValorOperando(mv, tB, vB);
     if (mv->errorFlag) return; // Evita un falso "dividir por 0" tras un fallo de segmento
@@ -728,7 +757,7 @@ void op_div(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x15: CMP (Compara A con B calculando A - B sin guardar el resultado)
-void op_cmp(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_cmp(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t b = obtenerValorOperando(mv, tB, vB);
     int32_t res = (int32_t)((uint32_t)a - (uint32_t)b);   // sin signo: ver op_add
@@ -742,32 +771,47 @@ void op_cmp(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x16: AND (Lógica AND bit a bit)
-void op_and(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
-    int32_t res = obtenerValorOperando(mv, tA, vA) & obtenerValorOperando(mv, tB, vB);
+// En AND, OR y XOR A se lee antes que B en sentencias separadas: el orden de evaluación de los
+// dos lados de un &, | o ^ no está especificado en C99 y definiría el orden de los accesos a memoria
+static void op_and(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+    int32_t a = obtenerValorOperando(mv, tA, vA);
+    int32_t b = obtenerValorOperando(mv, tB, vB);
+    int32_t res = a & b;
     guardarResultado(mv, tA, vA, res);
     actualizarCC(mv, res < 0, res == 0, 0, 0);
 }
 
 // 0x17: OR (Lógica OR bit a bit)
-void op_or(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
-    int32_t res = obtenerValorOperando(mv, tA, vA) | obtenerValorOperando(mv, tB, vB);
+static void op_or(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+    int32_t a = obtenerValorOperando(mv, tA, vA);
+    int32_t b = obtenerValorOperando(mv, tB, vB);
+    int32_t res = a | b;
     guardarResultado(mv, tA, vA, res);
     actualizarCC(mv, res < 0, res == 0, 0, 0);
 }
 
 // 0x18: XOR (Lógica XOR bit a bit)
-void op_xor(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
-    int32_t res = obtenerValorOperando(mv, tA, vA) ^ obtenerValorOperando(mv, tB, vB);
+static void op_xor(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+    int32_t a = obtenerValorOperando(mv, tA, vA);
+    int32_t b = obtenerValorOperando(mv, tB, vB);
+    int32_t res = a ^ b;
     guardarResultado(mv, tA, vA, res);
     actualizarCC(mv, res < 0, res == 0, 0, 0);
 }
 
 // 0x19: SWAP (Intercambio de valores entre operandos)
-void op_swap(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_swap(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t valA = obtenerValorOperando(mv, tA, vA);
     int32_t valB = obtenerValorOperando(mv, tB, vB);
-    guardarResultado(mv, tA, vA, valB);
-    guardarResultado(mv, tB, vB, valA);
+    // Si A es un registro y B es memoria, B se escribe primero: A puede ser (o contener)
+    // el registro base de B, y escribirlo antes cambiaría la dirección de B (SWAP EAX, [EAX])
+    if (tA == 1 && tB == 3) {
+        guardarResultado(mv, tB, vB, valA);
+        guardarResultado(mv, tA, vA, valB);
+    } else {
+        guardarResultado(mv, tA, vA, valB);
+        guardarResultado(mv, tB, vB, valA);
+    }
 
     // SWAP equivale a XOR A,B / XOR B,A / XOR A,B y afecta CC como el último XOR,
     // cuyo resultado es el nuevo valor de A (el B original)
@@ -775,7 +819,7 @@ void op_swap(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x1A: SHL (Desplazamiento lógico a la izquierda)
-void op_shl(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_shl(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t n = obtenerValorOperando(mv, tB, vB) & 0x1F; // Acotado a 0..31 bits
 
@@ -794,9 +838,14 @@ void op_shl(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x1B: SHR (Desplazamiento lógico a la derecha)
-void op_shr(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_shr(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     uint32_t a = (uint32_t)obtenerValorOperando(mv, tA, vA);
     int32_t n  = obtenerValorOperando(mv, tB, vB) & 0x1F;
+
+    // Los bits que quedan libres se completan con ceros también en AL, AH, AX, b[...] y w[...]:
+    // se descarta la extensión de signo de la lectura (SHR b[0], 1 con 0x80 da 0x40 y no 0xC0)
+    int bytes = cantBytesOperando(tA, vA);
+    if (bytes < 4) a &= (1U << (8 * bytes)) - 1U;
 
     uint32_t res = (n == 0) ? a : (a >> n);
     guardarResultado(mv, tA, vA, (int32_t)res);
@@ -807,7 +856,7 @@ void op_shr(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x1C: SAR (Desplazamiento aritmético a la derecha conservando signo)
-void op_sar(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_sar(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t n = obtenerValorOperando(mv, tB, vB) & 0x1F;
 
@@ -819,7 +868,7 @@ void op_sar(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x1D: LDL (Carga en los 2 bytes menos significativos)
-void op_ldl(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_ldl(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t b = obtenerValorOperando(mv, tB, vB);
     int32_t res = (a & (int32_t)0xFFFF0000) | (b & 0xFFFF);
@@ -827,7 +876,7 @@ void op_ldl(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 }
 
 // 0x1E: LDH (Carga en los 2 bytes más significativos)
-void op_ldh(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_ldh(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t a = obtenerValorOperando(mv, tA, vA);
     int32_t b = obtenerValorOperando(mv, tB, vB);
     int32_t res = (int32_t)(((uint32_t)a & 0x0000FFFFU) | (((uint32_t)b & 0xFFFFU) << 16));
@@ -836,7 +885,7 @@ void op_ldh(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
 
 // 0x1F: RND (Genera un número pseudoaleatorio entre 0 y B). No afecta CC: no está
 // en la lista de instrucciones que lo modifican
-void op_rnd(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
+static void op_rnd(TMV* mv, uint8_t tA, int32_t vA, uint8_t tB, int32_t vB) {
     int32_t b = obtenerValorOperando(mv, tB, vB);
     int32_t res = 0;
     if (b > 0) {

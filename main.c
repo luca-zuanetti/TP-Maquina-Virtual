@@ -97,6 +97,13 @@ int inicializarSegmentosYRegistros(TMV* mv, const uint32_t tamSeg[CANT_SEGMENTOS
                 total, mv->memSize);
         return 0;
     }
+    // Aunque la memoria sea mayor, las bases de la tabla y la dirección física de MAR son de
+    // 16 bits: el proceso completo debe quedar dentro de los primeros 64 KiB
+    if (total > ESPACIO_DIRECCIONABLE) {
+        fprintf(stderr, "Error: Memoria insuficiente (el proceso requiere %u bytes y solo se pueden direccionar %u bytes).\n",
+                total, ESPACIO_DIRECCIONABLE);
+        return 0;
+    }
 
     // 2. Limpieza de la memoria, la tabla de descriptores y los registros.
     //    Las entradas inactivas deben contener 0xFFFF en base y tamaño.
@@ -273,8 +280,10 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
     tamSeg[SEG_CODE] = ((uint32_t)header[6] << 8) | header[7];
 
     if (version == 1) {
-        // Compatibilidad MV1: el Data Segment ocupa toda la memoria restante
-        uint32_t resto = (mv->memSize > tamSeg[SEG_CODE]) ? mv->memSize - tamSeg[SEG_CODE] : 0;
+        // Compatibilidad MV1: el Data Segment ocupa toda la memoria restante (dentro de los
+        // 64 KiB direccionables, aunque la memoria sea mayor)
+        uint32_t limite = (mv->memSize < ESPACIO_DIRECCIONABLE) ? mv->memSize : ESPACIO_DIRECCIONABLE;
+        uint32_t resto  = (limite > tamSeg[SEG_CODE]) ? limite - tamSeg[SEG_CODE] : 0;
         tamSeg[SEG_DATA] = (resto > 0xFFFF) ? 0xFFFF : resto;
     } else {
         tamSeg[SEG_DATA]  = ((uint32_t)header[8]  << 8) | header[9];
@@ -635,10 +644,21 @@ void ejecutarMV(TMV* mv) {
             tipo_opB = 0;
         }
 
-        // La instrucción completa (byte de control + operandos) debe estar dentro
-        // del Code Segment; si está cortada no se lee fuera de él
+        // En MV2 los 32 códigos de operación existen: una instrucción es inválida si
+        // le falta un operando (por ejemplo un PUSH o un JMP con tipo de operando 00)
+        int faltaOperando = (opcode <= 0x0D && tipo_opA == 0) || (opcode >= 0x10 && tipo_opB == 0);
+        if (faltaOperando) {
+            printf("Error: Instruccion invalida (Opcode: 0x%02X)\n", opcode);
+            mv->errorFlag = 1;
+            break;
+        }
+
+        // La instrucción completa (byte de control + operandos) debe estar dentro del
+        // Code Segment. Su lectura no produce fallo de segmento (TP MV1, pág. 8): una
+        // instrucción cortada es inválida, y no se lee fuera del segmento
         if (traducirDireccion(mv, (uint32_t)mv->reg[IP], (uint16_t)(1 + tipo_opA + tipo_opB)) < 0) {
-            printf("Error: Fallo de segmento (instruccion incompleta en 0x%08X).\n", (uint32_t)mv->reg[IP]);
+            printf("Error: Instruccion invalida (incompleta al final del Code Segment en 0x%08X).\n",
+                   (uint32_t)mv->reg[IP]);
             mv->errorFlag = 1;
             break;
         }
@@ -681,10 +701,7 @@ void ejecutarMV(TMV* mv) {
         // ---------------------------------------------------------------------
         // 4. EXECUTE: Despacho a través de la tabla de punteros a función
         // ---------------------------------------------------------------------
-        // En MV2 los 32 códigos de operación existen: una instrucción es inválida si
-        // le falta un operando (por ejemplo un PUSH o un JMP con tipo de operando 00)
-        int faltaOperando = (opcode <= 0x0D && tipo_opA == 0) || (opcode >= 0x10 && tipo_opB == 0);
-        if (opcode >= 32 || tablaInstrucciones[opcode] == NULL || faltaOperando) {
+        if (tablaInstrucciones[opcode] == NULL) {
             printf("Error: Instruccion invalida (Opcode: 0x%02X)\n", opcode);
             mv->errorFlag = 1;
             break;
@@ -746,10 +763,14 @@ int main(int argc, char** argv) {
                 return 1;
             }
             memKiB = (uint32_t)valor;
-        } else if (tieneExtension(argv[i], ".vmx")) {
-            archVmx = argv[i];
-        } else if (tieneExtension(argv[i], ".vmi")) {
-            archVmi = argv[i];
+        } else if (tieneExtension(argv[i], ".vmx") || tieneExtension(argv[i], ".vmi")) {
+            // Se admite a lo sumo un archivo de cada tipo: un segundo no reemplaza al primero
+            const char** destino = tieneExtension(argv[i], ".vmx") ? &archVmx : &archVmi;
+            if (*destino != NULL) {
+                fprintf(stderr, "Error: Argumento repetido '%s' (ya se indico '%s').\n", argv[i], *destino);
+                return 1;
+            }
+            *destino = argv[i];
         } else {
             fprintf(stderr, "Error: Argumento no reconocido '%s'.\n", argv[i]);
             return 1;

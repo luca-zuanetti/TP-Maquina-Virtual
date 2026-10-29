@@ -21,8 +21,9 @@ El emulador simula a bajo nivel los subsistemas esenciales de un computador:
 ### 2.1 Memoria Principal (RAM)
 - Tamaño variable de **M KiB** indicado con el parámetro opcional `m=M` (por defecto **16 KiB**).
 - Se reserva dinámicamente (`calloc`) al iniciar y se libera al finalizar.
-- `M` debe estar entre **1 y 64 KiB**: la base y el tamaño de cada descriptor, y la dirección física de `MAR`, son de 16 bits, por lo que no es posible direccionar más de 64 KiB.
-- Rango de direcciones físicas válidas: `0x0000` hasta `M * 1024 - 1`.
+- `M` debe estar entre **1 y 65535 KiB** (el máximo que admite la cabecera del `.vmi`).
+- La base de cada descriptor y la dirección física de `MAR` son de 16 bits: aunque la memoria sea mayor, el proceso completo debe entrar en los primeros **64 KiB**; si no, se informa **Memoria insuficiente**.
+- Rango de direcciones físicas de la memoria: `0x0000` hasta `M * 1024 - 1` (el proceso ocupa a lo sumo los primeros 64 KiB).
 
 ### 2.2 Tabla de Descriptores de Segmentos
 Consta de 8 entradas de 32 bits (16 bits de dirección base física y 16 bits de tamaño en bytes).
@@ -63,7 +64,7 @@ Los punteros a segmento contienen `[16 bits entrada en la tabla | 16 bits offset
 El registro de estado utiliza los 4 bits más significativos para registrar el estado de la ALU:
 - **Bit 31 (N - Signo):** Se activa en `1` si el bit 31 del resultado es 1 (número negativo en C2).
 - **Bit 30 (Z - Cero):** Se activa en `1` si el resultado de la operación es exactamente 0.
-- **Bit 29 (C - Acarreo / Carry):** Se activa en `1` ante desbordamiento sin signo o desplazamiento de bits fuera del operando.
+- **Bit 29 (C - Acarreo / Carry):** Se activa en `1` cuando el resultado excede los 32 bits (acarreo de salida). En `SUB` y `CMP` es el acarreo de `A + ~B + 1`, como en la tabla oficial (`SUB -3, 5` deja C = 1). En `SHL`, `SHR` y `SAR` es el último bit desplazado fuera del operando.
 - **Bit 28 (V - Overflow):** Se activa en `1` cuando una operación aritmética signada produce un desbordamiento incoherente en C2.
 
 ---
@@ -105,7 +106,7 @@ Antes de utilizar la máquina virtual, se debe traducir el programa escrito en l
 2. Compilación de la Máquina Virtual:
 Para generar el archivo ejecutable del emulador a partir de los códigos fuente en C, utilizar GCC con banderas estrictas:
 ```bash
-gcc -Wall -Wextra -std=c99 main.c instrucciones.c dissasembler.c -o vmx.exe
+gcc -Wall -Wextra -pedantic -std=c99 main.c instrucciones.c dissasembler.c -o vmx.exe
 ```
 3. Ejecución de la Máquina Virtual:
 Para inicializar la máquina, cargar en memoria y correr el programa traducido, ejecutar el emulador pasándole el archivo binario como argumento:
@@ -118,7 +119,7 @@ Si se desea forzar a la máquina virtual a mostrar por consola la traza del cód
 ./vmx.exe programa.vmx -d
 ```
 5. Tamaño de la memoria principal:
-Para indicar el tamaño de la memoria en KiB (entre 1 y 64; por defecto 16), se agrega el parámetro opcional `m=M`:
+Para indicar el tamaño de la memoria en KiB (entre 1 y 65535; por defecto 16), se agrega el parámetro opcional `m=M`:
 ```bash
 ./vmx.exe programa.vmx m=32
 ```
@@ -136,3 +137,8 @@ Con solo el `.vmi` se retoma la ejecución desde el estado guardado (se ignoran 
 ```bash
 ./vmx.exe imagen.vmi
 ```
+
+### 6.4 Mensajes de error:
+- Los errores de la línea de comandos y de la carga (archivo inexistente, cabecera inválida, memoria insuficiente, pila menor a 12 bytes, imagen dañada) se informan por la salida de errores (`stderr`) y la máquina no llega a ejecutar.
+- Los errores de ejecución (fallo de segmento, división por cero, instrucción inválida, stack overflow y stack underflow) se informan por la salida estándar (`stdout`), a continuación de lo que imprimió el programa, para que el mensaje aparezca en orden aunque la salida esté redirigida.
+- En ambos casos la máquina termina con código de salida `1`; una ejecución normal (`STOP`, `RET` de `main`, IP fuera del Code Segment o `q` en un breakpoint) termina con `0`.
