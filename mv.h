@@ -4,75 +4,75 @@
 #include <stdint.h>
 
 /* ========================================================================= */
-/* CONSTANTES DE ARQUITECTURA                            */
+/* CONSTANTES DE ARQUITECTURA                                                */
 /* ========================================================================= */
-#define MEM_DEFAULT_KIB 16      /* Tamaño por defecto de la memoria principal (m=M omitido) */
-#define MEM_MAX_KIB     65535   /* Máximo representable en la cabecera .vmi (2 bytes) */
-#define ESPACIO_DIRECCIONABLE 0x10000U /* Bases y MAR de 16 bits: el proceso debe entrar en los primeros 64 KiB */
-#define SEG_AMOUNT      8       /* Entradas en la tabla de descriptores de segmentos */
-#define HEADER_SIZE_V1  8       /* Tamaño en bytes de la cabecera .vmx versión 1 */
-#define HEADER_SIZE_V2  18      /* Tamaño en bytes de la cabecera .vmx versión 2 */
-#define ENTRY_INACTIVE  0xFFFF  /* Valor indicador de descriptor inactivo (-1) */
-#define PILA_INICIAL    12      /* Bytes precargados en la pila: retorno, argc y argv */
-#define HEADER_SIZE_VMI 8       /* Tamaño en bytes de la cabecera .vmi */
+#define MEM_DEFAULT_KIB 16      /* Memoria por defecto si no se indica m=M */
+#define MEM_MAX_KIB     65535   /* Máximo que entra en la cabecera .vmi (2 bytes) */
+#define ESPACIO_DIRECCIONABLE 0x10000U /* Bases de 16 bits: el proceso entra en 64 KiB */
+#define SEG_AMOUNT      8       /* Entradas de la tabla de segmentos */
+#define HEADER_SIZE_V1  8       /* Cabecera .vmx versión 1 */
+#define HEADER_SIZE_V2  18      /* Cabecera .vmx versión 2 */
+#define ENTRY_INACTIVE  0xFFFF  /* Marca de entrada de tabla sin usar */
+#define PILA_INICIAL    12      /* Precarga de pila: retorno, argc y argv */
+#define HEADER_SIZE_VMI 8       /* Cabecera .vmi */
 #define VERSION_VMI     1       /* Versión del formato de imagen */
 
 /* ========================================================================= */
-/* BANDERAS DEL REGISTRO CC (Bits 31 a 28 de los 32 bits)                    */
+/* BANDERAS DEL REGISTRO CC (bits 31 a 28)                                   */
 /* ========================================================================= */
-#define CC_N 0x80000000U  /* Bit 31: Signo / Negativo                        */
-#define CC_Z 0x40000000U  /* Bit 30: Cero                                    */
-#define CC_C 0x20000000U  /* Bit 29: Acarreo (Carry)                         */
-#define CC_V 0x10000000U  /* Bit 28: Desbordamiento (Overflow C2)            */
+#define CC_N 0x80000000U  /* Negativo */
+#define CC_Z 0x40000000U  /* Cero */
+#define CC_C 0x20000000U  /* Carry */
+#define CC_V 0x10000000U  /* Overflow */
 
 /* ========================================================================= */
-/* ENUMERACIÓN DE REGISTROS                                                  */
+/* REGISTROS (índice = código del registro en la instrucción)                */
 /* ========================================================================= */
 typedef enum {
-    IP = 0,     /* Puntero de instrucción */
-    OPC,        /* Código de operación */
-    OP1,        /* Operando 1 (destino) */
-    OP2,        /* Operando 2 (fuente) */
-    LAR = 4,    /* Registro de dirección lógica */
-    MAR,        /* Registro de dirección física de memoria */
-    MBR,        /* Registro de búfer de datos de memoria */
-    SP = 7,     /* Puntero al tope de la pila (Stack Pointer) */
-    BP = 8,     /* Puntero base de la pila (Base Pointer) */
-    EAX = 10,   /* Registros de propósito general */
+    IP = 0,     /* Próxima instrucción */
+    OPC,        /* Opcode decodificado */
+    OP1,        /* Operando A decodificado */
+    OP2,        /* Operando B decodificado */
+    LAR = 4,    /* Dirección lógica accedida */
+    MAR,        /* Bytes accedidos | dirección física */
+    MBR,        /* Dato leído o escrito */
+    SP = 7,     /* Tope de la pila */
+    BP = 8,     /* Base del marco de pila */
+    EAX = 10,   /* Propósito general */
     EBX,
     ECX,
     EDX,
     EEX,
     EFX,
-    AC = 16,    /* Registro Acumulador */
-    CC = 17,    /* Registro de Código de Condición */
-    CS = 26,    /* Puntero al comienzo del Code Segment */
-    DS = 27,    /* Puntero al comienzo del Data Segment */
-    ES = 28,    /* Puntero al comienzo del Extra Segment */
-    SS = 29,    /* Puntero al comienzo del Stack Segment */
-    KS = 30,    /* Puntero al comienzo del Const Segment */
-    PS = 31     /* Puntero al comienzo del Param Segment */
+    AC = 16,    /* Acumulador (resto de DIV) */
+    CC = 17,    /* Códigos de condición NZCV */
+    CS = 26,    /* Punteros a segmento */
+    DS = 27,
+    ES = 28,
+    SS = 29,
+    KS = 30,
+    PS = 31
 } RegName;
 
 /* ========================================================================= */
-/* SEGMENTOS DEL PROCESO (en su orden físico obligatorio dentro de la RAM)   */
+/* SEGMENTOS DEL PROCESO (en su orden físico en la RAM)                      */
 /* ========================================================================= */
 typedef enum {
-    SEG_PARAM = 0,  /* Param Segment  -> PS */
-    SEG_CONST,      /* Const Segment  -> KS */
-    SEG_CODE,       /* Code Segment   -> CS */
-    SEG_DATA,       /* Data Segment   -> DS */
-    SEG_EXTRA,      /* Extra Segment  -> ES */
-    SEG_STACK,      /* Stack Segment  -> SS */
+    SEG_PARAM = 0,  /* PS */
+    SEG_CONST,      /* KS */
+    SEG_CODE,       /* CS */
+    SEG_DATA,       /* DS */
+    SEG_EXTRA,      /* ES */
+    SEG_STACK,      /* SS */
     CANT_SEGMENTOS
 } SegProceso;
 
 /* ========================================================================= */
-/* ENUMERACIÓN DE CÓDIGOS DE OPERACIÓN (OPCODES)                             */
+/* CÓDIGOS DE OPERACIÓN                                                      */
 /* ========================================================================= */
 typedef enum {
-    SYS = 0x00, 
-    JMP, JP, JN, JZ, JC, JV, JNP, JNN, JNZ, 
+    SYS = 0x00,
+    JMP, JP, JN, JZ, JC, JV, JNP, JNN, JNZ,
     NOT = 0x0A,
     PUSH = 0x0B, POP, CALL, RET,
     STOP = 0x0F,
@@ -86,45 +86,40 @@ typedef enum {
 /* ESTRUCTURAS DE DATOS                                                      */
 /* ========================================================================= */
 
-/* Descriptor de segmento: almacena la base física y su tamaño en bytes */
+/* Entrada de la tabla de segmentos */
 typedef struct {
-    uint16_t base;  /* Dirección física de inicio en la RAM */
-    uint16_t size;  /* Cantidad de bytes asignados al segmento */
+    uint16_t base;  /* Dirección física de inicio */
+    uint16_t size;  /* Tamaño en bytes */
 } TableSeg;
 
-/* Estado global de la Máquina Virtual */
+/* Estado completo de la máquina virtual */
 typedef struct {
-    uint8_t*  mem;             /* Memoria física lineal (reservada dinámicamente) */
-    uint32_t  memSize;         /* Tamaño de la memoria física en bytes (M * 1024) */
-    int32_t   reg[32];         /* Banco de 32 registros de 32 bits */
-    TableSeg  seg[SEG_AMOUNT]; /* Tabla de descriptores de segmentos */
-    int       errorFlag;       /* Bandera de control de errores (0 = OK, 1 = Error) */
-    const char* archVmi;       /* Archivo de imagen para los breakpoints (NULL si no se indicó) */
-    int       bpPendiente;     /* 1 si SYS F pidió un breakpoint al terminar la instrucción */
-    int       pasoAPaso;       /* 1 si se está ejecutando de a una instrucción (Enter) */
+    uint8_t*  mem;             /* RAM (reservada dinámicamente) */
+    uint32_t  memSize;         /* Tamaño de la RAM en bytes */
+    int32_t   reg[32];         /* Banco de registros */
+    TableSeg  seg[SEG_AMOUNT]; /* Tabla de segmentos */
+    int       errorFlag;       /* 1 = error: corta la ejecución */
+    const char* archVmi;       /* Imagen para breakpoints (NULL = sin breakpoints) */
+    int       bpPendiente;     /* SYS F pidió pausa */
+    int       pasoAPaso;       /* Modo paso a paso activo */
 } TMV;
 
 /* ========================================================================= */
 /* TABLA DE DESPACHO DE INSTRUCCIONES                                        */
 /* ========================================================================= */
 
-/* Firma estándar para los manejadores de cada instrucción:
-   - mv: puntero a la máquina virtual
-   - tipo_opA: tipo de operando A (0: ninguno, 1: registro, 2: inmediato, 3: memoria)
-   - valA: valor decodificado bruto de A
-   - tipo_opB: tipo de operando B
-   - valB: valor decodificado bruto de B */
+/* Firma común de las instrucciones: tipo (0 ninguno, 1 reg, 2 inm, 3 mem) y valor de A y B */
 typedef void (*InstruccionFunc)(TMV* mv, uint8_t tipo_opA, int32_t valA, uint8_t tipo_opB, int32_t valB);
 
-/* Arreglo global de funciones para despachar instrucciones según su opcode */
+/* opcode -> función que lo ejecuta */
 extern InstruccionFunc tablaInstrucciones[32];
 
-/* Diccionarios de texto para registros y mnemónicos */
+/* Nombres de registros y mnemónicos (para el disassembler) */
 extern const char* regStr[32];
 extern const char* opStr[32];
 
 /* ========================================================================= */
-/* PROTOTIPOS DE FUNCIONES                                                   */
+/* PROTOTIPOS                                                                */
 /* ========================================================================= */
 int crearMemoria(TMV* mv, uint32_t tamKiB);
 void liberarMemoria(TMV* mv);

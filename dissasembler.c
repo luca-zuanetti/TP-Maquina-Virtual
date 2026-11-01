@@ -2,70 +2,55 @@
 #include <stdint.h>
 #include "mv.h"
 
-/**
- * @brief Arma en un búfer la representación en texto de un operando según su
- *        tipo (se arma como texto para poder alinearlo en columnas).
- *
- * @param buf   Búfer de salida.
- * @param tam   Tamaño del búfer.
- * @param tipo  Tipo de operando (1: Registro, 2: Inmediato, 3: Memoria).
- * @param valor Valor bruto leído de los bytes de la instrucción.
- */
+/* Texto de un operando: registro (EAX/AL/AH/AX), inmediato o memoria (b/w/l[reg+off]). */
 static void formatearOperando(char* buf, size_t tam, uint8_t tipo, int32_t valor) {
     buf[0] = '\0';
     if (tipo == 1) {
-        // Operando Registro (1 byte): índice de 0 a 31
+        // Registro: código (5 bits) + sector (2 bits)
         uint8_t regCode = valor & 0x1F;
         uint8_t sector = (valor >> 5) & 0x03;
 
-        // Si es un registro de propósito general (EAX a EFX), evaluamos el pseudónimo
+        // EAX..EFX admiten sectores: EAX, AL, AH, AX
         if (regCode >= 10 && regCode <= 15) {
-            char letra = regStr[regCode][1]; // Extrae la letra (A, B, C, D, E, F) de "EAX", "EBX", etc.
+            char letra = regStr[regCode][1]; // 'A' de "EAX", 'B' de "EBX"...
 
-            if (sector == 0) snprintf(buf, tam, "E%cX", letra);      // Ejemplo: EAX
-            else if (sector == 1) snprintf(buf, tam, "%cL", letra);  // Ejemplo: AL
-            else if (sector == 2) snprintf(buf, tam, "%cH", letra);  // Ejemplo: AH
-            else snprintf(buf, tam, "%cX", letra);                   // Ejemplo: AX
+            if (sector == 0) snprintf(buf, tam, "E%cX", letra);      // EAX
+            else if (sector == 1) snprintf(buf, tam, "%cL", letra);  // AL
+            else if (sector == 2) snprintf(buf, tam, "%cH", letra);  // AH
+            else snprintf(buf, tam, "%cX", letra);                   // AX
         } else {
-            snprintf(buf, tam, "%s", regStr[regCode]); // Punteros y registros especiales
+            snprintf(buf, tam, "%s", regStr[regCode]); // resto de los registros
         }
     }
     else if (tipo == 2) {
-        // Operando Inmediato (2 bytes): constante entera con signo
+        // Inmediato: 16 bits con signo
         snprintf(buf, tam, "%d", (int16_t)valor);
     }
     else if (tipo == 3) {
-        // Operando Memoria (3 bytes): [registro + desplazamiento]
+        // Memoria: [registro + desplazamiento]
         uint8_t regCode = valor & 0x1F;
         int16_t offset = (int16_t)((valor >> 8) & 0xFFFF);
         uint8_t mod = (valor >> 5) & 0x07;
 
-        // Modificador de tamaño como prefijo
+        // Prefijo de tamaño
         const char* prefijo = (mod == 1) ? "b" : (mod == 2) ? "w" : (mod == 4) ? "l" : "";
 
-        // Formato oficial: el desplazamiento siempre lleva signo, incluso el cero ([DS+0])
+        // El desplazamiento siempre con signo, incluso +0
         snprintf(buf, tam, "%s[%s%s%d]", prefijo, regStr[regCode], (offset < 0) ? "" : "+", offset);
     }
 }
 
-/* Ancho de la columna hexadecimal: la instrucción más larga ocupa 7 bytes
-   (byte de control + 3 bytes de OP_B + 3 bytes de OP_A) */
+/* Instrucción más larga: 1 + 3 + 3 = 7 bytes (ancho de la columna hexa) */
 #define MAX_BYTES_LINEA 7
 
-/**
- * @brief Recorre el Const Segment e imprime cada cadena terminada en '\0'.
- * Formato:  [XXXX] XX XX XX XX         | "cadena"
- *
- * El volcado hexadecimal incluye el '\0'. Si la cadena ocupa más de 7 bytes
- * se muestran los primeros 6 seguidos de "..". Entre comillas va la cadena
- * sin el '\0', con un punto en lugar de cada carácter no imprimible.
- */
+/* Lista las cadenas del Const Segment:  [XXXX] XX XX ... | "cadena"
+   (más de 7 bytes: muestra 6 y ".."; no imprimibles como '.'). */
 static void imprimirConstantes(TMV* mv) {
-    if (mv->reg[KS] == -1) return; // El proceso no tiene Const Segment
+    if (mv->reg[KS] == -1) return; // sin Const Segment
 
     uint16_t segCons = (uint16_t)(((uint32_t)mv->reg[KS] >> 16) & 0xFFFF);
     if (segCons >= SEG_AMOUNT) return;
-    // KS de una imagen podría apuntar a una entrada inactiva: no hay nada que mostrar
+    // Entrada inactiva (imagen dañada): nada que mostrar
     if (mv->seg[segCons].base == ENTRY_INACTIVE && mv->seg[segCons].size == ENTRY_INACTIVE) return;
 
     uint32_t baseCons = mv->seg[segCons].base;
@@ -75,17 +60,17 @@ static void imprimirConstantes(TMV* mv) {
     while (offset_actual < tamCons) {
         uint32_t dir_fisica_cad = baseCons + offset_actual;
 
-        // 1. Largo de la cadena incluyendo el '\0' (sin pasarse del fin del segmento)
+        // 1. Largo de la cadena con su '\0'
         uint32_t largo = 0;
         while (offset_actual + largo < tamCons && mv->mem[dir_fisica_cad + largo] != 0) {
             largo++;
         }
-        if (offset_actual + largo < tamCons) largo++; // Cuenta el '\0'
+        if (offset_actual + largo < tamCons) largo++; // cuenta el '\0'
 
-        // 2. Dirección física (el espacio inicial alinea con la marca '>' del código)
+        // 2. Dirección física
         printf(" [%04X] ", dir_fisica_cad);
 
-        // 3. Volcado hexadecimal: completo hasta 7 bytes, si no 6 bytes y ".."
+        // 3. Bytes en hexa (hasta 7, si no 6 + "..")
         if (largo <= MAX_BYTES_LINEA) {
             for (uint32_t i = 0; i < largo; i++) {
                 printf("%02X ", mv->mem[dir_fisica_cad + i]);
@@ -101,7 +86,7 @@ static void imprimirConstantes(TMV* mv) {
         }
         printf("| \"");
 
-        // 4. Cadena entre comillas, reemplazando los caracteres no imprimibles por '.'
+        // 4. Cadena entre comillas
         for (uint32_t i = 0; i < largo && mv->mem[dir_fisica_cad + i] != 0; i++) {
             uint8_t c = mv->mem[dir_fisica_cad + i];
             putchar((c >= 32 && c <= 126) ? c : '.');
@@ -112,11 +97,8 @@ static void imprimirConstantes(TMV* mv) {
     }
 }
 
-/**
- * @brief Muestra las constantes del Const Segment y luego recorre el segmento
- *        de código imprimiendo cada instrucción desensamblada.
- * Formato: >[XXXX] XX XX XX XX | MNEM       OP_A,       OP_B   ('>' marca el entry point)
- */
+/* DISASSEMBLER (-d): muestra las constantes y luego cada instrucción del Code Segment.
+   Formato: >[XXXX] XX XX XX | MNEM  OP_A, OP_B   ('>' = entry point) */
 void ejecutarDisassembler(TMV* mv) {
     imprimirConstantes(mv);
 
@@ -125,8 +107,7 @@ void ejecutarDisassembler(TMV* mv) {
     uint32_t tamCod  = mv->seg[segCod].size;
     uint32_t offset_actual = 0;
 
-    // Antes de ejecutar, IP apunta al entry point: su offset está en los 16 bits bajos.
-    // Solo se marca si IP apunta al Code Segment (no, por ejemplo, si vale -1)
+    // Antes de ejecutar, IP = entry point
     uint16_t segIP       = (uint16_t)(((uint32_t)mv->reg[IP] >> 16) & 0xFFFF);
     uint16_t entryOffset = (uint16_t)((uint32_t)mv->reg[IP] & 0xFFFF);
     int hayEntryPoint    = (segIP == segCod);
@@ -134,8 +115,8 @@ void ejecutarDisassembler(TMV* mv) {
     while (offset_actual < tamCod) {
         uint32_t dir_fisica_inst = baseCod + offset_actual;
         uint8_t primer_byte = mv->mem[dir_fisica_inst];
-        
-        // Decodificación del byte de control
+
+        // Decode del byte de control (igual que en ejecutarMV)
         uint8_t opcode   = primer_byte & 0x1F;
         uint8_t tipo_opA = 0;
         uint8_t tipo_opB = 0;
@@ -151,8 +132,7 @@ void ejecutarDisassembler(TMV* mv) {
             tipo_opB = 0;
         }
 
-        // Una instrucción cortada al final del Code Segment no se decodifica:
-        // se vuelcan solo sus bytes presentes para no leer fuera del segmento
+        // Instrucción cortada al final de CS: solo se vuelcan sus bytes
         uint32_t largo_inst = 1U + tipo_opA + tipo_opB;
         int incompleta = (offset_actual + largo_inst > tamCod);
         if (incompleta) {
@@ -163,8 +143,8 @@ void ejecutarDisassembler(TMV* mv) {
         uint32_t offset_lectura = 1;
         int32_t valorB = 0;
         int32_t valorA = 0;
-        
-        // 1. Lectura Operando B (en memoria física antecede a OP_A)
+
+        // 1. Operando B (viene primero)
         if (tipo_opB > 0) {
             for (int i = 0; i < tipo_opB; i++) {
                 valorB = (valorB << 8) | mv->mem[dir_fisica_inst + offset_lectura];
@@ -172,8 +152,8 @@ void ejecutarDisassembler(TMV* mv) {
             }
             if (tipo_opB == 2) valorB = (int16_t)valorB;
         }
-        
-        // 2. Lectura Operando A
+
+        // 2. Operando A
         if (tipo_opA > 0) {
             for (int i = 0; i < tipo_opA; i++) {
                 valorA = (valorA << 8) | mv->mem[dir_fisica_inst + offset_lectura];
@@ -184,27 +164,26 @@ void ejecutarDisassembler(TMV* mv) {
 
         if (incompleta) offset_lectura = tamCod - offset_actual;
 
-        // 3. Marca del entry point y dirección física en hexadecimal a 4 dígitos
+        // 3. Marca '>' y dirección física
         int esEntryPoint = hayEntryPoint && offset_actual == entryOffset;
         printf("%c[%04X] ", esEntryPoint ? '>' : ' ', dir_fisica_inst);
 
-        // 4. Volcado en hexadecimal de los bytes leídos de la instrucción
+        // 4. Bytes de la instrucción en hexa
         for (uint32_t i = 0; i < offset_lectura; i++) {
             printf("%02X ", mv->mem[dir_fisica_inst + i]);
         }
 
-        // 5. Relleno para alinear columnas (la instrucción más larga ocupa 7 bytes)
+        // 5. Relleno hasta 7 bytes para alinear
         for (uint32_t i = offset_lectura; i < MAX_BYTES_LINEA; i++) {
             printf("   ");
         }
         printf("| ");
 
-        // 6. Mnemónico de la instrucción ("???" si está cortada), alineado a derecha
-        //    como en la máquina virtual de referencia de la cátedra (vmg)
+        // 6. Mnemónico ("???" si está cortada)
         const char* mnem = (!incompleta && opcode < 32 && opStr[opcode] != NULL) ? opStr[opcode] : "???";
         printf("%4s", mnem);
 
-        // 7. Operandos en orden convencional (OP_A, OP_B), alineados a derecha en 10 columnas
+        // 7. Operandos A, B alineados a derecha
         char textoA[24], textoB[24];
         formatearOperando(textoA, sizeof(textoA), tipo_opA, valorA);
         formatearOperando(textoB, sizeof(textoB), tipo_opB, valorB);
