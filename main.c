@@ -7,10 +7,10 @@
 #include "mv.h"
 
 /* ========================================================================= */
-/* DICCIONARIOS GLOBALES DE NOMBRES Y MNEMÓNICOS                             */
+/* NOMBRES DE REGISTROS Y MNEMÓNICOS                                         */
 /* ========================================================================= */
 
-// Mapeo de nombres para los 32 registros según la arquitectura 2026 (MV2)
+// Código de registro -> nombre
 const char* regStr[32] = {
     "IP", "OPC", "OP1", "OP2", "LAR", "MAR", "MBR", "SP",
     "BP", "RESERVED", "EAX", "EBX", "ECX", "EDX", "EEX", "EFX",
@@ -19,29 +19,22 @@ const char* regStr[32] = {
     "ES", "SS", "KS", "PS"
 };
 
-// Mapeo de mnemónicos para los 32 posibles códigos de operación (Opcodes)
+// Opcode -> mnemónico
 const char* opStr[32] = {
     "SYS", "JMP", "JP", "JN", "JZ", "JC", "JV", "JNP", "JNN", "JNZ", "NOT",
-    "PUSH", "POP", "CALL", "RET", "STOP", "MOV", "ADD", "SUB", "MUL", "DIV", 
+    "PUSH", "POP", "CALL", "RET", "STOP", "MOV", "ADD", "SUB", "MUL", "DIV",
     "CMP", "AND", "OR", "XOR", "SWAP", "SHL", "SHR", "SAR", "LDL", "LDH", "RND"
 };
 
-// Registro puntero asociado a cada segmento del proceso (mismo orden que SegProceso)
+// Registro puntero de cada segmento (mismo orden que SegProceso)
 static const RegName regSegmento[CANT_SEGMENTOS] = { PS, KS, CS, DS, ES, SS };
 
 /* ========================================================================= */
-/* MEMORIA PRINCIPAL DE TAMAÑO VARIABLE                                      */
+/* MEMORIA PRINCIPAL                                                         */
 /* ========================================================================= */
 
-/**
- * @brief Reserva la memoria principal de la Máquina Virtual.
- *
- * @param mv     Puntero a la Máquina Virtual.
- * @param tamKiB Tamaño de la memoria expresado en KiB (parámetro m=M).
- * @return int   1 si se pudo reservar, 0 ante error.
- */
+/* Reserva la RAM de M KiB (m=M o cabecera del .vmi). 1 = OK, 0 = error. */
 int crearMemoria(TMV* mv, uint32_t tamKiB) {
-    // El tamaño puede venir de m=M o de la cabecera de un .vmi: se valida aquí
     if (tamKiB == 0 || tamKiB > MEM_MAX_KIB) {
         fprintf(stderr, "Error: Tamano de memoria invalido (%u KiB, debe ser entre 1 y %d KiB).\n",
                 tamKiB, MEM_MAX_KIB);
@@ -60,9 +53,7 @@ int crearMemoria(TMV* mv, uint32_t tamKiB) {
     return 1;
 }
 
-/**
- * @brief Libera la memoria principal reservada por crearMemoria.
- */
+/* Libera la RAM. */
 void liberarMemoria(TMV* mv) {
     free(mv->mem);
     mv->mem = NULL;
@@ -70,24 +61,13 @@ void liberarMemoria(TMV* mv) {
 }
 
 /* ========================================================================= */
-/* INICIALIZACIÓN DE SEGMENTOS Y REGISTROS                                   */
+/* SEGMENTOS Y REGISTROS                                                     */
 /* ========================================================================= */
 
-/**
- * @brief Ubica los segmentos del proceso en la RAM, arma la tabla de
- *        descriptores e inicializa los registros punteros a segmento.
- *
- * Los segmentos se ubican de forma contigua respetando el orden
- * PS, KS, CS, DS, ES, SS. Solo se crean entradas en la tabla para los
- * segmentos de tamaño mayor a cero, en el mismo orden que en la RAM.
- * Los registros de los segmentos inexistentes quedan cargados con -1.
- *
- * @param mv     Puntero a la Máquina Virtual (con la memoria ya creada).
- * @param tamSeg Tamaño en bytes de cada segmento, indexado por SegProceso.
- * @return int   1 si el proceso entra en memoria, 0 si la memoria es insuficiente.
- */
+/* Ubica los segmentos contiguos (PS, KS, CS, DS, ES, SS), arma la tabla y carga
+   los registros puntero. Solo los segmentos con tamaño > 0 tienen entrada. */
 int inicializarSegmentosYRegistros(TMV* mv, const uint32_t tamSeg[CANT_SEGMENTOS]) {
-    // 1. Verificación de capacidad: el proceso completo debe entrar en la RAM
+    // 1. El proceso tiene que entrar en la RAM...
     uint32_t total = 0;
     for (int i = 0; i < CANT_SEGMENTOS; i++) {
         total += tamSeg[i];
@@ -97,16 +77,14 @@ int inicializarSegmentosYRegistros(TMV* mv, const uint32_t tamSeg[CANT_SEGMENTOS
                 total, mv->memSize);
         return 0;
     }
-    // Aunque la memoria sea mayor, las bases de la tabla y la dirección física de MAR son de
-    // 16 bits: el proceso completo debe quedar dentro de los primeros 64 KiB
+    // ...y en los primeros 64 KiB (bases de 16 bits)
     if (total > ESPACIO_DIRECCIONABLE) {
         fprintf(stderr, "Error: Memoria insuficiente (el proceso requiere %u bytes y solo se pueden direccionar %u bytes).\n",
                 total, ESPACIO_DIRECCIONABLE);
         return 0;
     }
 
-    // 2. Limpieza de la memoria, la tabla de descriptores y los registros.
-    //    Las entradas inactivas deben contener 0xFFFF en base y tamaño.
+    // 2. Limpieza: RAM y registros en 0, entradas de tabla inactivas
     memset(mv->mem, 0, mv->memSize);
     for (int i = 0; i < SEG_AMOUNT; i++) {
         mv->seg[i].base = ENTRY_INACTIVE;
@@ -115,8 +93,8 @@ int inicializarSegmentosYRegistros(TMV* mv, const uint32_t tamSeg[CANT_SEGMENTOS
     memset(mv->reg, 0, sizeof(mv->reg));
     mv->errorFlag = 0;
 
-    // 3. Ubicación contigua de los segmentos presentes y carga de sus punteros
-    //    lógicos (16 bits índice en la tabla | 16 bits offset = 0)
+    // 3. Cada segmento presente toma la siguiente entrada; su registro = [entrada | offset 0].
+    //    Segmento ausente: registro en -1
     uint32_t base = 0;
     int entrada = 0;
     for (int i = 0; i < CANT_SEGMENTOS; i++) {
@@ -131,22 +109,19 @@ int inicializarSegmentosYRegistros(TMV* mv, const uint32_t tamSeg[CANT_SEGMENTOS
         }
     }
 
-    // 4. La pila arranca vacía: SP apunta justo después del final del Stack Segment
+    // 4. Pila vacía: SP apunta al final del Stack Segment
     if (tamSeg[SEG_STACK] > 0) {
         mv->reg[SP] = mv->reg[SS] + (int32_t)tamSeg[SEG_STACK];
     } else {
         mv->reg[SP] = -1;
     }
 
-    // 5. IP comienza en el inicio del Code Segment (el loader le suma el entry point)
+    // 5. IP al inicio del Code Segment (el loader le suma el entry point)
     mv->reg[IP] = mv->reg[CS];
     return 1;
 }
 
-/**
- * @brief Escribe un valor de 4 bytes en formato Big Endian (el byte más
- *        significativo queda en la dirección más baja).
- */
+/* Escribe 4 bytes en Big Endian. */
 static void escribirBigEndian32(uint8_t* destino, uint32_t valor) {
     destino[0] = (uint8_t)(valor >> 24);
     destino[1] = (uint8_t)(valor >> 16);
@@ -154,10 +129,7 @@ static void escribirBigEndian32(uint8_t* destino, uint32_t valor) {
     destino[3] = (uint8_t)valor;
 }
 
-/**
- * @brief Calcula el tamaño del Param Segment: los strings (nombre del .vmx y
- *        parámetros, cada uno con su '\0') seguidos del arreglo argv de punteros.
- */
+/* Tamaño del Param Segment: strings (nombre del .vmx + parámetros) + arreglo argv. */
 static uint32_t calcularTamParam(const char* nombreArch, int cantParam, char** params) {
     uint32_t tam = (uint32_t)strlen(nombreArch) + 1;
     for (int i = 0; i < cantParam; i++) {
@@ -166,16 +138,13 @@ static uint32_t calcularTamParam(const char* nombreArch, int cantParam, char** p
     return tam + 4U * (uint32_t)(cantParam + 1);
 }
 
-/**
- * @brief Escribe el contenido del Param Segment: primero los strings y al
- *        final el arreglo argv de punteros lógicos de 4 bytes (Big Endian).
- */
+/* Llena el Param Segment: primero los strings, después argv (punteros lógicos). */
 static void cargarParamSegment(TMV* mv, const char* nombreArch, int cantParam, char** params) {
     uint32_t entradaPS = ((uint32_t)mv->reg[PS] >> 16) & 0xFFFF;
     uint8_t* inicio    = mv->mem + mv->seg[entradaPS].base;
     uint32_t offset    = 0;
 
-    // 1. Strings: nombre del archivo .vmx seguido de cada parámetro
+    // 1. Strings terminados en '\0'
     for (int i = 0; i <= cantParam; i++) {
         const char* str = (i == 0) ? nombreArch : params[i - 1];
         size_t largo = strlen(str) + 1;
@@ -183,7 +152,7 @@ static void cargarParamSegment(TMV* mv, const char* nombreArch, int cantParam, c
         offset += (uint32_t)largo;
     }
 
-    // 2. Arreglo argv: punteros [entrada de PS | offset del string]
+    // 2. argv: un puntero [entrada PS | offset] por string
     uint32_t offsetStr = 0;
     for (int i = 0; i <= cantParam; i++) {
         const char* str = (i == 0) ? nombreArch : params[i - 1];
@@ -193,17 +162,8 @@ static void cargarParamSegment(TMV* mv, const char* nombreArch, int cantParam, c
     }
 }
 
-/**
- * @brief Precarga la pila para la subrutina principal. Desde el tope:
- *        [SP] dirección de retorno -1, [SP+4] argc y [SP+8] puntero a argv.
- *
- * Sin parámetros (sin -p, o -p sin nada detrás): argc = 0 y argv = -1. Con parámetros: argc cuenta el nombre del .vmx
- * más los parámetros (tamaño del arreglo argv) y argv apunta al arreglo,
- * ubicado en el Param Segment después de todos los strings.
- * La escritura es directa sobre la RAM: es el loader, no una instrucción,
- * por lo que no pasa por LAR, MAR ni MBR.
- * Requiere un Stack Segment de al menos PILA_INICIAL bytes (lo valida cargarArchivo).
- */
+/* Prepara la pila del "main" del programa: [SP] retorno -1, [SP+4] argc, [SP+8] argv.
+   Sin parámetros: argc = 0 y argv = -1. Escribe directo en RAM (es el loader). */
 static void precargarPila(TMV* mv, const char* nombreArch, int cantParam, char** params) {
     uint32_t entradaSS = ((uint32_t)mv->reg[SS] >> 16) & 0xFFFF;
     uint32_t tamSS     = mv->seg[entradaSS].size;
@@ -211,7 +171,7 @@ static void precargarPila(TMV* mv, const char* nombreArch, int cantParam, char**
     int32_t argc   = 0;
     int32_t ptrArgv = -1;
     if (cantParam > 0) {
-        // argv comienza al final de los strings: su offset es la suma de sus largos
+        // argv está después de todos los strings
         uint32_t offsetArgv = (uint32_t)strlen(nombreArch) + 1;
         for (int i = 0; i < cantParam; i++) {
             offsetArgv += (uint32_t)strlen(params[i]) + 1;
@@ -220,29 +180,16 @@ static void precargarPila(TMV* mv, const char* nombreArch, int cantParam, char**
         ptrArgv = (int32_t)((uint32_t)mv->reg[PS] | offsetArgv);
     }
 
-    // SP pasa de SS + tamaño (pila vacía) a SS + tamaño - 12
     mv->reg[SP] -= PILA_INICIAL;
     uint8_t* tope = mv->mem + mv->seg[entradaSS].base + (tamSS - PILA_INICIAL);
-    escribirBigEndian32(tope,     0xFFFFFFFFU);        // Dirección de retorno: fuera del Code Segment
+    escribirBigEndian32(tope,     0xFFFFFFFFU);        // RET final -> IP = -1 -> fin
     escribirBigEndian32(tope + 4, (uint32_t)argc);
     escribirBigEndian32(tope + 8, (uint32_t)ptrArgv);
 }
 
-/**
- * @brief Lee el archivo binario ejecutable (.vmx), crea los segmentos del
- *        proceso y carga el código, las constantes y los parámetros en RAM.
- *
- * Soporta ambas versiones de cabecera:
- * - Versión 1 (8 bytes):  solo Code Segment; el Data Segment ocupa el resto de la RAM.
- * - Versión 2 (18 bytes): tamaños de CS, DS, ES, SS, KS y offset del entry point;
- *   además precarga la pila de la subrutina principal (retorno -1, argc y argv).
- *
- * @param mv         Puntero a la Máquina Virtual (con la memoria ya creada).
- * @param nombreArch Nombre o ruta del archivo binario a ejecutar.
- * @param cantParam  Cantidad de parámetros indicados con -p (-1 si no se usó -p, 0 si -p no tiene parámetros).
- * @param params     Parámetros indicados con -p.
- * @return int       1 si la carga fue exitosa, 0 ante cualquier error.
- */
+/* LOADER: lee el .vmx, valida la cabecera, crea los segmentos y carga código,
+   constantes y parámetros. V1: solo CS + DS con el resto de la RAM.
+   V2: tamaños de todos los segmentos + entry point + precarga de pila. */
 int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params) {
     FILE* arch = fopen(nombreArch, "rb");
     if (!arch) {
@@ -250,7 +197,7 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
         return 0;
     }
 
-    // Lectura de la parte común de la cabecera (identificador, versión y tamaño del código)
+    // Cabecera común: "VMX26", versión y tamaño del código
     uint8_t header[HEADER_SIZE_V2];
     if (fread(header, 1, HEADER_SIZE_V1, arch) != HEADER_SIZE_V1) {
         fprintf(stderr, "Error: Archivo incompleto o no se pudo leer la cabecera.\n");
@@ -258,7 +205,6 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
         return 0;
     }
 
-    // Verificación de la firma "VMX26" y versión (1 o 2)
     uint8_t version = header[5];
     if (memcmp(header, "VMX26", 5) != 0 || (version != 1 && version != 2)) {
         fprintf(stderr, "Error: Identificador invalido (se esperaba 'VMX26') o version no soportada.\n");
@@ -266,7 +212,7 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
         return 0;
     }
 
-    // Resto de la cabecera de la versión 2
+    // V2: 10 bytes más de cabecera
     if (version == 2 &&
         fread(header + HEADER_SIZE_V1, 1, HEADER_SIZE_V2 - HEADER_SIZE_V1, arch) != HEADER_SIZE_V2 - HEADER_SIZE_V1) {
         fprintf(stderr, "Error: Archivo incompleto o no se pudo leer la cabecera.\n");
@@ -274,14 +220,13 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
         return 0;
     }
 
-    // Tamaños de los segmentos (campos de 16 bits en formato Big Endian)
+    // Tamaños de segmento (16 bits Big Endian)
     uint32_t tamSeg[CANT_SEGMENTOS] = {0};
     uint16_t entryPoint = 0;
     tamSeg[SEG_CODE] = ((uint32_t)header[6] << 8) | header[7];
 
     if (version == 1) {
-        // Compatibilidad MV1: el Data Segment ocupa toda la memoria restante (dentro de los
-        // 64 KiB direccionables, aunque la memoria sea mayor)
+        // V1: el Data Segment ocupa el resto de la memoria (tope 64 KiB)
         uint32_t limite = (mv->memSize < ESPACIO_DIRECCIONABLE) ? mv->memSize : ESPACIO_DIRECCIONABLE;
         uint32_t resto  = (limite > tamSeg[SEG_CODE]) ? limite - tamSeg[SEG_CODE] : 0;
         tamSeg[SEG_DATA] = (resto > 0xFFFF) ? 0xFFFF : resto;
@@ -292,7 +237,7 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
         tamSeg[SEG_CONST] = ((uint32_t)header[14] << 8) | header[15];
         entryPoint        = (uint16_t)(((uint16_t)header[16] << 8) | header[17]);
 
-        // El Param Segment solo existe si hay parámetros (un -p sin nada detrás no lo crea)
+        // Param Segment solo si hay parámetros tras -p
         if (cantParam > 0) {
             tamSeg[SEG_PARAM] = calcularTamParam(nombreArch, cantParam, params);
             if (tamSeg[SEG_PARAM] > 0xFFFF) {
@@ -303,15 +248,13 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
         }
     }
 
-    // El Code Segment siempre debe existir; sin él el registro CS quedaría en -1
-    // y no habría entrada válida en la tabla
+    // Validaciones: CS obligatorio y entry point dentro de CS
     if (tamSeg[SEG_CODE] == 0) {
         fprintf(stderr, "Error: El ejecutable debe tener Code Segment de tamano mayor a cero.\n");
         fclose(arch);
         return 0;
     }
 
-    // El entry point debe apuntar dentro del Code Segment
     if (entryPoint >= tamSeg[SEG_CODE]) {
         fprintf(stderr, "Error: Entry point invalido (0x%04X) para un Code Segment de %u bytes.\n",
                 entryPoint, tamSeg[SEG_CODE]);
@@ -319,14 +262,13 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
         return 0;
     }
 
-    // Primero se valida que el proceso entre en la RAM (Memoria insuficiente)
+    // Arma segmentos y registros (falla si no hay memoria suficiente)
     if (!inicializarSegmentosYRegistros(mv, tamSeg)) {
         fclose(arch);
         return 0;
     }
 
-    // Recién después, el Stack Segment de la versión 2 debe existir y poder alojar la
-    // precarga de la subrutina principal (retorno, argc y argv); la versión 1 no tiene pila
+    // V2: la pila debe alojar retorno, argc y argv
     if (version == 2 && tamSeg[SEG_STACK] < PILA_INICIAL) {
         fprintf(stderr, "Error: Stack overflow (la pila de %u bytes no alcanza para los %d bytes de la subrutina principal).\n",
                 tamSeg[SEG_STACK], PILA_INICIAL);
@@ -334,7 +276,7 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
         return 0;
     }
 
-    // Carga del código a partir de la base del Code Segment
+    // Código -> Code Segment
     uint32_t entradaCS = ((uint32_t)mv->reg[CS] >> 16) & 0xFFFF;
     if (fread(mv->mem + mv->seg[entradaCS].base, 1, tamSeg[SEG_CODE], arch) != tamSeg[SEG_CODE]) {
         fprintf(stderr, "Error: El archivo termino inesperadamente al leer el codigo.\n");
@@ -342,7 +284,7 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
         return 0;
     }
 
-    // Carga de las constantes, ubicadas en el archivo a continuación del código
+    // Constantes (siguen al código en el archivo) -> Const Segment
     if (tamSeg[SEG_CONST] > 0) {
         uint32_t entradaKS = ((uint32_t)mv->reg[KS] >> 16) & 0xFFFF;
         if (fread(mv->mem + mv->seg[entradaKS].base, 1, tamSeg[SEG_CONST], arch) != tamSeg[SEG_CONST]) {
@@ -357,38 +299,27 @@ int cargarArchivo(TMV* mv, const char* nombreArch, int cantParam, char** params)
         cargarParamSegment(mv, nombreArch, cantParam, params);
     }
 
-    // La versión 1 no tiene pila: solo la versión 2 arranca en la subrutina principal
+    // Solo V2 tiene pila
     if (version == 2) {
         precargarPila(mv, nombreArch, cantParam, params);
     }
 
-    // El IP arranca en el entry point: [entrada de CS | offset del entry point]
+    // IP = [entrada CS | entry point]
     mv->reg[IP] = mv->reg[CS] | entryPoint;
     return 1;
 }
 
 /* ========================================================================= */
-/* IMAGEN DE LA MÁQUINA VIRTUAL (.vmi)                                       */
+/* IMAGEN DE LA MÁQUINA (.vmi)                                               */
 /* ========================================================================= */
 
-/**
- * @brief Lee un valor de 4 bytes en formato Big Endian (operación inversa
- *        de escribirBigEndian32).
- */
+/* Lee 4 bytes en Big Endian. */
 static uint32_t leerBigEndian32(const uint8_t* origen) {
     return ((uint32_t)origen[0] << 24) | ((uint32_t)origen[1] << 16) |
            ((uint32_t)origen[2] << 8)  |  (uint32_t)origen[3];
 }
 
-/**
- * @brief Guarda el estado completo de la máquina en un archivo de imagen (.vmi):
- *        cabecera, 32 registros, tabla de segmentos y memoria principal.
- *        Todos los valores de más de un byte se guardan en Big Endian.
- *
- * @param mv        Puntero a la Máquina Virtual.
- * @param nombreVmi Nombre o ruta del archivo de imagen (se sobrescribe si existe).
- * @return int      1 si se pudo escribir, 0 ante error.
- */
+/* Guarda el estado completo en el .vmi: cabecera, registros, tabla y RAM. */
 int guardarImagen(TMV* mv, const char* nombreVmi) {
     FILE* arch = fopen(nombreVmi, "wb");
     if (!arch) {
@@ -396,7 +327,7 @@ int guardarImagen(TMV* mv, const char* nombreVmi) {
         return 0;
     }
 
-    // 1. Cabecera: identificador, versión y tamaño de la memoria en KiB
+    // 1. Cabecera: "VMI26", versión, tamaño de memoria en KiB
     uint8_t header[HEADER_SIZE_VMI];
     uint32_t tamKiB = mv->memSize / 1024U;
     memcpy(header, "VMI26", 5);
@@ -404,13 +335,13 @@ int guardarImagen(TMV* mv, const char* nombreVmi) {
     header[6] = (uint8_t)(tamKiB >> 8);
     header[7] = (uint8_t)tamKiB;
 
-    // 2. Registros: 32 x 4 bytes
+    // 2. 32 registros x 4 bytes
     uint8_t regs[32 * 4];
     for (int i = 0; i < 32; i++) {
         escribirBigEndian32(regs + 4 * i, (uint32_t)mv->reg[i]);
     }
 
-    // 3. Tabla de descriptores: 8 x (base 2 bytes, tamaño 2 bytes)
+    // 3. Tabla: 8 x (base, tamaño)
     uint8_t tabla[SEG_AMOUNT * 4];
     for (int i = 0; i < SEG_AMOUNT; i++) {
         tabla[4 * i]     = (uint8_t)(mv->seg[i].base >> 8);
@@ -419,7 +350,7 @@ int guardarImagen(TMV* mv, const char* nombreVmi) {
         tabla[4 * i + 3] = (uint8_t)mv->seg[i].size;
     }
 
-    // 4. Escritura de las secciones y, al final, la memoria completa
+    // 4. Escritura en orden y, al final, la RAM completa
     int ok = fwrite(header, 1, sizeof(header), arch) == sizeof(header) &&
              fwrite(regs,   1, sizeof(regs),   arch) == sizeof(regs)   &&
              fwrite(tabla,  1, sizeof(tabla),  arch) == sizeof(tabla)  &&
@@ -432,15 +363,7 @@ int guardarImagen(TMV* mv, const char* nombreVmi) {
     return ok;
 }
 
-/**
- * @brief Carga el estado de la máquina desde un archivo de imagen (.vmi):
- *        crea la memoria con el tamaño de la cabecera y restaura registros,
- *        tabla de segmentos y memoria tal como están en el archivo.
- *
- * @param mv        Puntero a la Máquina Virtual (sin memoria creada).
- * @param nombreVmi Nombre o ruta del archivo de imagen.
- * @return int      1 si la carga fue exitosa, 0 ante cualquier error.
- */
+/* Restaura el estado desde un .vmi para retomar una ejecución pausada. */
 int cargarImagen(TMV* mv, const char* nombreVmi) {
     FILE* arch = fopen(nombreVmi, "rb");
     if (!arch) {
@@ -448,7 +371,7 @@ int cargarImagen(TMV* mv, const char* nombreVmi) {
         return 0;
     }
 
-    // 1. Cabecera: identificador "VMI26" y versión 1
+    // 1. Cabecera "VMI26" versión 1
     uint8_t header[HEADER_SIZE_VMI];
     uint8_t regs[32 * 4];
     uint8_t tabla[SEG_AMOUNT * 4];
@@ -460,7 +383,7 @@ int cargarImagen(TMV* mv, const char* nombreVmi) {
         return 0;
     }
 
-    // 2. Registros y tabla de segmentos
+    // 2. Registros y tabla
     if (fread(regs, 1, sizeof(regs), arch) != sizeof(regs) ||
         fread(tabla, 1, sizeof(tabla), arch) != sizeof(tabla)) {
         fprintf(stderr, "Error: Archivo de imagen incompleto.\n");
@@ -468,7 +391,7 @@ int cargarImagen(TMV* mv, const char* nombreVmi) {
         return 0;
     }
 
-    // 3. Memoria principal con el tamaño indicado en la cabecera (crearMemoria lo valida)
+    // 3. RAM del tamaño indicado en la cabecera
     uint32_t tamKiB = ((uint32_t)header[6] << 8) | header[7];
     if (!crearMemoria(mv, tamKiB)) {
         fclose(arch);
@@ -481,7 +404,7 @@ int cargarImagen(TMV* mv, const char* nombreVmi) {
     }
     fclose(arch);
 
-    // 4. Restauración de registros y tabla
+    // 4. Restaura registros y tabla
     for (int i = 0; i < 32; i++) {
         mv->reg[i] = (int32_t)leerBigEndian32(regs + 4 * i);
     }
@@ -489,7 +412,7 @@ int cargarImagen(TMV* mv, const char* nombreVmi) {
         mv->seg[i].base = (uint16_t)((tabla[4 * i]     << 8) | tabla[4 * i + 1]);
         mv->seg[i].size = (uint16_t)((tabla[4 * i + 2] << 8) | tabla[4 * i + 3]);
 
-        // Cada segmento activo debe estar dentro de la memoria: si no, la imagen está dañada
+        // Imagen dañada: segmento fuera de la RAM
         int inactiva = mv->seg[i].base == ENTRY_INACTIVE && mv->seg[i].size == ENTRY_INACTIVE;
         if (!inactiva && (uint32_t)mv->seg[i].base + mv->seg[i].size > mv->memSize) {
             fprintf(stderr, "Error: La imagen tiene un segmento fuera de la memoria (entrada %d).\n", i);
@@ -497,8 +420,7 @@ int cargarImagen(TMV* mv, const char* nombreVmi) {
         }
     }
 
-    // CS debe apuntar a una entrada activa: el ciclo de ejecución y el desensamblador
-    // indexan la tabla con él (una imagen dañada no puede leer fuera de la tabla)
+    // Imagen dañada: CS debe apuntar a una entrada activa
     uint32_t entradaCS = ((uint32_t)mv->reg[CS] >> 16) & 0xFFFF;
     if (entradaCS >= SEG_AMOUNT ||
         (mv->seg[entradaCS].base == ENTRY_INACTIVE && mv->seg[entradaCS].size == ENTRY_INACTIVE)) {
@@ -510,28 +432,17 @@ int cargarImagen(TMV* mv, const char* nombreVmi) {
 }
 
 /* ========================================================================= */
-/* UNIDAD DE MANEJO DE MEMORIA (MMU)                                         */
+/* MMU: TRADUCCIÓN DE DIRECCIONES                                            */
 /* ========================================================================= */
 
-/**
- * @brief Traduce una dirección lógica a física y valida los límites de acceso.
- * 
- * Estructura de la dirección lógica:
- * - Bits 31..16: Índice en la tabla de descriptores de segmentos (0..7).
- * - Bits 15..0:  Desplazamiento (offset) relativo al inicio del segmento.
- * 
- * @param mv                Puntero a la Máquina Virtual.
- * @param dir_logica        Dirección de 32 bits a traducir.
- * @param cant_bytes_acceso Cantidad de bytes que se planean leer o escribir.
- * @return int32_t          Dirección física en RAM (>= 0) o -1 ante fallo de segmento.
- */
+/* Lógica [entrada (16 bits) | offset (16 bits)] -> física = base + offset.
+   Devuelve -1 (fallo de segmento) si la entrada no existe o el acceso se sale del segmento. */
 int32_t traducirDireccion(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes_acceso) {
     uint16_t indice_seg = (uint16_t)((dir_logica >> 16) & 0xFFFF);
     uint16_t offset     = (uint16_t)(dir_logica & 0xFFFF);
 
-    // Validación de descriptor de segmento válido y activo
-    if (indice_seg >= SEG_AMOUNT) return -1; 
-    // (inactiva = base y tamaño en 0xFFFF; un segmento activo puede empezar en 0xFFFF)
+    // Entrada válida y activa
+    if (indice_seg >= SEG_AMOUNT) return -1;
     if (mv->seg[indice_seg].base == ENTRY_INACTIVE &&
         mv->seg[indice_seg].size == ENTRY_INACTIVE) return -1;
 
@@ -542,9 +453,9 @@ int32_t traducirDireccion(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes_acce
     uint32_t limite_segmento  = dir_base + tamano_seg;
     uint32_t limite_acceso    = dir_fisica + cant_bytes_acceso;
 
-    // El acceso debe estar estrictamente dentro del tamaño asignado al segmento
+    // Todos los bytes accedidos deben caer dentro del segmento
     if (limite_acceso > limite_segmento) {
-        return -1; 
+        return -1;
     }
 
     return (int32_t)dir_fisica;
@@ -554,12 +465,7 @@ int32_t traducirDireccion(TMV* mv, uint32_t dir_logica, uint16_t cant_bytes_acce
 /* CICLO DE EJECUCIÓN (FETCH - DECODE - EXECUTE)                             */
 /* ========================================================================= */
 
-/**
- * @brief Breakpoint: guarda la imagen en el .vmi y espera la acción del usuario.
- * - g:     continúa hasta el próximo breakpoint o el final.
- * - q:     aborta la ejecución (el .vmi queda intacto para retomarla).
- * - Enter: ejecuta la siguiente instrucción y vuelve a pausar (paso a paso).
- */
+/* Breakpoint: guarda la imagen y pregunta. g = continuar, q = salir, Enter = paso a paso. */
 static void realizarBreakpoint(TMV* mv) {
     if (!guardarImagen(mv, mv->archVmi)) {
         mv->errorFlag = 1;
@@ -576,76 +482,71 @@ static void realizarBreakpoint(TMV* mv) {
             while ((resto = getchar()) != '\n' && resto != EOF);   // descarta el resto de la línea
         }
 
-        if (c == '\n') {                        // Enter: paso a paso
+        if (c == '\n') {                        // Enter: pausa en la próxima instrucción
             mv->pasoAPaso = 1;
             return;
         }
-        if (c == 'g' || c == 'G' || c == EOF) { // go (o fin de la entrada): sigue sin pausar
+        if (c == 'g' || c == 'G' || c == EOF) { // g: sigue sin pausar
             mv->pasoAPaso = 0;
             return;
         }
-        if (c == 'q' || c == 'Q') {             // quit: termina como un STOP; la imagen ya quedó guardada
+        if (c == 'q' || c == 'Q') {             // q: termina como STOP (el .vmi queda guardado)
             mv->reg[IP] = -1;
             return;
         }
-        // Cualquier otra tecla: se vuelve a preguntar
+        // Otra tecla: vuelve a preguntar
     }
 }
 
-/**
- * @brief Bucle principal de ejecución del procesador virtual.
- */
+/* CPU: repite fetch -> decode -> avance de IP -> execute hasta STOP, error o salir de CS. */
 void ejecutarMV(TMV* mv) {
-    // El Code Segment ya no ocupa siempre la entrada 0 de la tabla
     uint16_t seg_cod = (uint16_t)(((uint32_t)mv->reg[CS] >> 16) & 0xFFFF);
     uint32_t tamCod  = mv->seg[seg_cod].size;
 
-    // El ciclo se repite mientras IP no sea -1 (0xFFFFFFFF) y no ocurra ningún error
+    // Corre mientras IP != -1 y no haya error
     while (mv->reg[IP] != (int32_t)0xFFFFFFFF && mv->errorFlag == 0) {
         uint16_t seg_ip = (uint16_t)(((uint32_t)mv->reg[IP] >> 16) & 0xFFFF);
         uint16_t off_ip = (uint16_t)((uint32_t)mv->reg[IP] & 0xFFFF);
 
-        // Fin normal de la ejecución si el puntero IP sale del Code Segment
+        // IP fuera del Code Segment: fin normal
         if (seg_ip != seg_cod || off_ip >= tamCod) {
             break;
         }
 
         // ---------------------------------------------------------------------
-        // 1. FETCH: Búsqueda del primer byte de la instrucción apuntado por IP
+        // 1. FETCH: byte de control apuntado por IP
         // ---------------------------------------------------------------------
         int32_t dir_fisica_ip = traducirDireccion(mv, (uint32_t)mv->reg[IP], 1);
         if (dir_fisica_ip < 0) {
-            break; // Si no puede leer por límites, termina pacíficamente
+            break;
         }
 
         uint8_t primer_byte = mv->mem[dir_fisica_ip];
 
         // ---------------------------------------------------------------------
-        // 2. DECODE: Extracción de Opcode y tipos de operando
+        // 2. DECODE: opcode (5 bits bajos) y tipos de operando (2 bits c/u)
         // ---------------------------------------------------------------------
         uint8_t opcode   = primer_byte & 0x1F;        // Bits 0..4
         uint8_t tipo_opA = 0;
         uint8_t tipo_opB = 0;
 
-        // Evaluación de aridad según el rango del OpCode
         if (opcode >= 0x10 && opcode <= 0x1F) {
-            // 2 Operandos (MOV a RND): A en bits 4..5, B en bits 6..7
+            // 2 operandos: B en bits 7-6, A en bits 5-4
             tipo_opA = (primer_byte >> 4) & 0x03;
             tipo_opB = (primer_byte >> 6) & 0x03;
-        } 
+        }
         else if (opcode <= 0x0D) {
-            // 1 Operando (SYS a NOT, PUSH, POP y CALL): Único operando (A) en bits 6..7
+            // 1 operando: A en bits 7-6
             tipo_opA = (primer_byte >> 6) & 0x03;
             tipo_opB = 0;
-        } 
+        }
         else if (opcode == 0x0F) {
-            // 0 Operandos (STOP)
+            // 0 operandos (STOP; RET también queda en 0)
             tipo_opA = 0;
             tipo_opB = 0;
         }
 
-        // En MV2 los 32 códigos de operación existen: una instrucción es inválida si
-        // le falta un operando (por ejemplo un PUSH o un JMP con tipo de operando 00)
+        // Inválida si le falta un operando obligatorio
         int faltaOperando = (opcode <= 0x0D && tipo_opA == 0) || (opcode >= 0x10 && tipo_opB == 0);
         if (faltaOperando) {
             printf("Error: Instruccion invalida (Opcode: 0x%02X)\n", opcode);
@@ -653,9 +554,7 @@ void ejecutarMV(TMV* mv) {
             break;
         }
 
-        // La instrucción completa (byte de control + operandos) debe estar dentro del
-        // Code Segment. Su lectura no produce fallo de segmento (TP MV1, pág. 8): una
-        // instrucción cortada es inválida, y no se lee fuera del segmento
+        // Inválida si la instrucción queda cortada al final del Code Segment
         if (traducirDireccion(mv, (uint32_t)mv->reg[IP], (uint16_t)(1 + tipo_opA + tipo_opB)) < 0) {
             printf("Error: Instruccion invalida (incompleta al final del Code Segment en 0x%08X).\n",
                    (uint32_t)mv->reg[IP]);
@@ -663,43 +562,42 @@ void ejecutarMV(TMV* mv) {
             break;
         }
 
-        // Los registros de instrucción almacenan la información decodificada
+        // OPC, OP1 y OP2 = [tipo (8 bits) | operando tal cual está codificado]
         mv->reg[OPC] = opcode;
         mv->reg[OP1] = (tipo_opA << 24);
         mv->reg[OP2] = (tipo_opB << 24);
 
-        uint32_t offset_lectura = 1; // Ya leímos el byte de control
+        uint32_t offset_lectura = 1; // byte de control ya leído
         int32_t valorB = 0;
         int32_t valorA = 0;
 
-        // Lectura del Operando B (en memoria máquina viene primero por orden inverso).
-        // OP1 y OP2 guardan el operando tal cual está codificado (sin extender el signo)
+        // Operando B (viene primero en memoria)
         if (tipo_opB > 0) {
             for (int i = 0; i < tipo_opB; i++) {
                 valorB = (valorB << 8) | mv->mem[dir_fisica_ip + offset_lectura];
                 offset_lectura++;
             }
             mv->reg[OP2] |= valorB;
-            if (tipo_opB == 2) valorB = (int16_t)valorB; // Extensión si es inmediato
+            if (tipo_opB == 2) valorB = (int16_t)valorB; // inmediato: extensión de signo
         }
 
-        // Lectura del Operando A
+        // Operando A
         if (tipo_opA > 0) {
             for (int i = 0; i < tipo_opA; i++) {
                 valorA = (valorA << 8) | mv->mem[dir_fisica_ip + offset_lectura];
                 offset_lectura++;
             }
             mv->reg[OP1] |= valorA;
-            if (tipo_opA == 2) valorA = (int16_t)valorA; // Extensión si es inmediato
+            if (tipo_opA == 2) valorA = (int16_t)valorA; // inmediato: extensión de signo
         }
 
         // ---------------------------------------------------------------------
-        // 3. UPDATE IP: El IP avanza sumando los bytes de la instrucción actual
+        // 3. UPDATE IP: avanza al inicio de la próxima instrucción
         // ---------------------------------------------------------------------
         mv->reg[IP] += offset_lectura;
 
         // ---------------------------------------------------------------------
-        // 4. EXECUTE: Despacho a través de la tabla de punteros a función
+        // 4. EXECUTE: llama a la función del opcode por la tabla de despacho
         // ---------------------------------------------------------------------
         if (tablaInstrucciones[opcode] == NULL) {
             printf("Error: Instruccion invalida (Opcode: 0x%02X)\n", opcode);
@@ -709,7 +607,7 @@ void ejecutarMV(TMV* mv) {
 
         tablaInstrucciones[opcode](mv, tipo_opA, valorA, tipo_opB, valorB);
 
-        // Breakpoint pedido por SYS F o modo paso a paso: se pausa después de la instrucción
+        // Breakpoint (SYS F o paso a paso): pausa después de ejecutar
         if (mv->errorFlag == 0 && (mv->bpPendiente || mv->pasoAPaso)) {
             mv->bpPendiente = 0;
             realizarBreakpoint(mv);
@@ -718,13 +616,10 @@ void ejecutarMV(TMV* mv) {
 }
 
 /* ========================================================================= */
-/* PUNTO DE ENTRADA PRINCIPAL (MAIN)                                         */
+/* MAIN                                                                      */
 /* ========================================================================= */
 
-/**
- * @brief Indica si un nombre de archivo termina con la extensión dada
- *        (sin distinguir mayúsculas de minúsculas).
- */
+/* ¿El nombre termina en la extensión dada? (sin distinguir mayúsculas) */
 static int tieneExtension(const char* nombre, const char* ext) {
     size_t largoNom = strlen(nombre);
     size_t largoExt = strlen(ext);
@@ -737,18 +632,21 @@ static int tieneExtension(const char* nombre, const char* ext) {
     return 1;
 }
 
+/* Flujo: 1) leer argumentos  2) cargar .vmx o .vmi  3) armar tabla de instrucciones
+          4) desensamblar si -d  5) ejecutar  6) liberar memoria. */
 int main(int argc, char** argv) {
-    // Sintaxis: vmx [filename.vmx] [filename.vmi] [m=M] [-d] [-p param1 ... paramN]
+    // Uso: vmx [filename.vmx] [filename.vmi] [m=M] [-d] [-p param1 ... paramN]
     const char* archVmx  = NULL;
     const char* archVmi  = NULL;
     uint32_t    memKiB   = MEM_DEFAULT_KIB;
     int         disasm   = 0;
-    int         cantParam = -1;   // -1: no se indicó el flag -p
+    int         cantParam = -1;   // -1: no se usó -p
     char**      params   = NULL;
 
+    // 1. Lectura de argumentos
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-p") == 0) {
-            // -p siempre va al final: todo lo que sigue son parámetros del proceso
+            // -p va al final: lo que sigue son parámetros del programa
             params    = &argv[i + 1];
             cantParam = argc - i - 1;
             break;
@@ -764,7 +662,7 @@ int main(int argc, char** argv) {
             }
             memKiB = (uint32_t)valor;
         } else if (tieneExtension(argv[i], ".vmx") || tieneExtension(argv[i], ".vmi")) {
-            // Se admite a lo sumo un archivo de cada tipo: un segundo no reemplaza al primero
+            // A lo sumo un archivo de cada tipo
             const char** destino = tieneExtension(argv[i], ".vmx") ? &archVmx : &archVmi;
             if (*destino != NULL) {
                 fprintf(stderr, "Error: Argumento repetido '%s' (ya se indico '%s').\n", argv[i], *destino);
@@ -777,7 +675,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Es obligatorio al menos uno de los dos archivos
+    // Hace falta al menos un .vmx o un .vmi
     if (!archVmx && !archVmi) {
         printf("Uso: %s [filename.vmx] [filename.vmi] [m=M] [-d] [-p param1 ... paramN]\n", argv[0]);
         return 1;
@@ -786,11 +684,12 @@ int main(int argc, char** argv) {
     // Inicialización del generador de números aleatorios para la instrucción RND
     srand((unsigned int)time(NULL));
 
-    TMV mv = {0};          // mv.mem nace en NULL: liberarMemoria es seguro en cualquier salida
-    mv.archVmi = archVmi;  // NULL si no se indicó: los breakpoints se ignoran
+    TMV mv = {0};
+    mv.archVmi = archVmi;  // sin .vmi: SYS F se ignora
 
+    // 2. Carga
     if (archVmx) {
-        // Programa nuevo: memoria de m=M KiB y carga del .vmx (el .vmi es solo para breakpoints)
+        // Programa nuevo: RAM de m=M KiB + loader del .vmx
         if (!crearMemoria(&mv, memKiB)) {
             return 1;
         }
@@ -799,25 +698,25 @@ int main(int argc, char** argv) {
             return 1;
         }
     } else {
-        // Solo .vmi: se retoma la ejecución; memoria, tabla y registros salen de la imagen
-        // (el tamaño m=M y los parámetros -p se ignoran)
+        // Solo .vmi: retoma la ejecución desde la imagen (ignora m=M y -p)
         if (!cargarImagen(&mv, archVmi)) {
             liberarMemoria(&mv);
             return 1;
         }
     }
 
-    // Inicialización de la tabla de despacho de operaciones
+    // 3. Inicialización de la tabla de despacho de operaciones
     inicializarTablaInstrucciones();
 
-    // Flag opcional de desensamblado (-d)
+    // 4. Disassembler (-d)
     if (disasm) {
         ejecutarDisassembler(&mv);
     }
 
-    // Ejecución del programa en código máquina
+    // 5. Ejecución
     ejecutarMV(&mv);
 
+    // 6. Fin: código de salida 1 si hubo error
     int codigoSalida = mv.errorFlag;
     liberarMemoria(&mv);
     return codigoSalida;
